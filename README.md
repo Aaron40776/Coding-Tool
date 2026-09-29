@@ -71,6 +71,7 @@ Plans are auto-approved in `-p` mode. It needs no terminal, so it works in pipes
 | `/new` | start a fresh conversation (forget earlier tasks) |
 | `/undo` | revert the file changes of the last task (needs git); repeat to step back further |
 | `/diff` | show what the last task changed |
+| `/resume` | continue a failed or cancelled task from its first unfinished step (`smart --resume` does it at startup, `smart -p --resume` headless) |
 | `/mode <bypass\|edits\|plan\|auto>` | permission mode; `plan` is read-only |
 | `/help`, `/quit`, `Ctrl+C` | help, quit |
 
@@ -79,8 +80,9 @@ Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prom
 **Referencing files:** type `@` and a path (`Tab` completes it): `refactor @src/parser.ts to use async iterators`. The file's contents go to the planner and the first coding step.
 **Multi-line prompts:** end a line with `\` and press Enter (or Alt+Enter), or just paste; pasted text never sends by itself.
 
-**Plan approval.** After planning, review the plan: `↑ ↓` select, `Space` skip a step, `m` pick a model for a step,
-`e` / `i` edit a step's title / instructions, `PgUp` / `PgDn` scroll a long step, `Enter` run, `Esc` cancel. Full step text is always reachable, even on a small terminal.
+**Plan approval.** After planning, review the plan: `↑ ↓` select, `Space` skip a step, `a` add a step after the selected one, `d` delete it, `J` / `K` move it down / up,
+`m` pick a model for a step, `e` / `i` edit a step's title / instructions (instructions can be multi-line: `Alt+Enter`, or `\` then `Enter`), `PgUp` / `PgDn` scroll a long step,
+`Enter` run, `Esc` cancel. Full step text is always reachable, even on a small terminal.
 
 ### The screen
 
@@ -166,6 +168,10 @@ npm run dev        # run from source
 ```
 
 Tests mock Claude (`vitest`, `ink-testing-library`). Run the CLI wrapper against the real `claude` with `npm run dev`.
+
+- `SMART_E2E=1 npm test -- test/e2e` runs one tiny task through the real `claude` CLI on Haiku (a few cents) and checks the file, the cost and the saved history.
+- `npm run bench` compares plain Sonnet, plain Opus and `smart` on six small tasks with checkable outcomes. It prints the tasks and a rough cost estimate and **runs nothing** until you add `--run`
+  (`npm run bench -- --run --tasks fizzbuzz,fix-bug --variants sonnet,smart`). It writes `bench-results.md`. The savings claim is not benchmarked yet: run it and share the numbers.
 
 ## License
 

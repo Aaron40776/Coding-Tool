@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `/resume` and `smart --resume` (also `smart -p --resume`): continue a failed or cancelled task from its first unfinished step, without re-classifying or re-planning. The approved plan and finished steps are saved with the conversation.
+- Plan review: add (`a`), delete (`d`) and reorder (`J`/`K`) steps; multi-line instructions (`Alt+Enter` or `\` + `Enter`).
+- `npm run bench`: opt-in benchmark of plain Sonnet, plain Opus and `smart` (prints an estimate first, runs only with `--run`).
+- `SMART_E2E=1` real-CLI smoke test.
+- README: install from a clone (the package is not on npm yet).
+
 ## 0.2.0
 
 First complete release: a Claude Code wrapper with smart model routing.

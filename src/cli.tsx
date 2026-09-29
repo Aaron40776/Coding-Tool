@@ -36,6 +36,7 @@ interface Options {
   plan: boolean;
   config?: string;
   continue?: boolean;
+  resume?: boolean;
   print?: boolean;
   outputFormat: 'text' | 'json';
   verbose?: boolean;
@@ -82,6 +83,7 @@ async function main() {
     .option('--no-plan', 'skip the planning step and run the task as a single step')
     .option('--config <path>', 'path to a smart.config.json')
     .option('-c, --continue', 'continue the previous conversation in this directory')
+    .option('--resume', 'continue the last failed or cancelled task from its first unfinished step (implies -c)')
     .option('-p, --print', 'headless mode: no UI, progress on stderr, final reply on stdout (reads the task from stdin if none given)')
     .option('--output-format <format>', 'with --print: text (default) or json', parseFormat, 'text')
     .option('--verbose', 'with --print: also stream tool calls to stderr')
@@ -90,6 +92,7 @@ async function main() {
     .parse();
 
   const opts = program.opts<Options>();
+  if (opts.resume) opts.continue = true;
   const task = program.args.join(' ').trim();
   const cwd = process.cwd();
 
@@ -129,8 +132,8 @@ async function main() {
 
   if (opts.print) {
     let prompt = task;
-    if (!prompt && !process.stdin.isTTY) prompt = await readStdin();
-    if (!prompt) return fail('with --print, give a task as an argument or on stdin: smart -p "fix the typo in README"');
+    if (!prompt && !opts.resume && !process.stdin.isTTY) prompt = await readStdin();
+    if (!prompt && !opts.resume) return fail('with --print, give a task as an argument or on stdin: smart -p "fix the typo in README"');
     pipeline.forceModel(opts.model ?? null);
     for (const w of configWarnings) process.stderr.write(`smart: warning: ${w}\n`);
     // `kill` / `timeout` / a closed terminal must stop Claude Code too, not orphan it (it would keep editing files and spending money).
@@ -141,7 +144,7 @@ async function main() {
     };
     process.on('SIGTERM', stop(143));
     process.on('SIGHUP', stop(129));
-    const code = await runPrint(pipeline, bus, prompt, { format: opts.outputFormat, verbose: Boolean(opts.verbose), dryRun: opts.dryRun, noPlan: !opts.plan }, { out: process.stdout, err: process.stderr });
+    const code = await runPrint(pipeline, bus, prompt, { format: opts.outputFormat, verbose: Boolean(opts.verbose), dryRun: opts.dryRun, noPlan: !opts.plan, resume: opts.resume }, { out: process.stdout, err: process.stderr });
     checkpoints.dispose();
     // process.exit() can drop what is still buffered when stdout is a pipe (output past ~64 KB was lost), so flush first.
     await new Promise<void>((r) => process.stdout.write('', () => r()));
@@ -171,8 +174,8 @@ async function main() {
       pricing={config.pricing}
       startupNotices={startupNotices}
       inputHistory={new InputHistory(expandHome(config.historyPath))}
-      oneShot={Boolean(task)}
-      initial={task ? { prompt: task, dryRun: opts.dryRun, noPlan: !opts.plan, model: opts.model ?? null } : { prompt: '', dryRun: opts.dryRun, noPlan: !opts.plan, model: opts.model ?? null }}
+      oneShot={Boolean(task) || Boolean(opts.resume)}
+      initial={{ prompt: task, dryRun: opts.dryRun, noPlan: !opts.plan, model: opts.model ?? null, resume: opts.resume }}
       onExit={(ok) => {
         exitCode = ok ? 0 : 1;
       }}
