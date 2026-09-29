@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,6 +6,7 @@ import type { ClaudeResult, RunClaudeFn } from '../../src/core/claude.js';
 import { defaultConfig, type SmartConfig } from '../../src/core/config.js';
 import { ConversationStore } from '../../src/core/conversation.js';
 import { EventBus, type SmartEvent } from '../../src/core/events.js';
+import { SmartError } from '../../src/core/errors.js';
 import { parseClassification } from '../../src/core/classifier.js';
 import { route } from '../../src/core/router.js';
 import type { Checkpointer } from '../../src/core/checkpoint.js';
@@ -145,5 +146,84 @@ describe('the git snapshot runs while the classifier thinks', () => {
     expect(order[0]).toBe('snapshot-start');
     expect(order.indexOf('snapshot-done')).toBeLessThan(order.indexOf('executor'));
     expect(t.calls[0]?.role).toBe('classifier');
+  });
+});
+
+describe('review fixes', () => {
+  it('a greeting whose reply fails does not replace the unfinished task', async () => {
+    const t = setup({
+      complexities: ['large_build'],
+      config: (c) => { c.escalation.retriesPerModel = 0; c.escalation.ladder = ['sonnet']; },
+      // step B of the plan fails, and so does the tool-less greeting reply
+      executor: (call) => {
+        if (call.prompt.includes('do b') || call.tools?.length === 0) throw new SmartError('claude', 'rate limited');
+        return { isError: false, subtype: 'success', text: 'ok', structured: undefined, usage: emptyUsage(), sessionId: 's', numTurns: 1 };
+      },
+    });
+    await t.pipeline.runTask('build it', { autoApprove: true });
+    expect(t.pipeline.pendingTask?.prompt).toBe('build it');
+    const res = await t.pipeline.runTask('hey');
+    expect(res.ok).toBe(false);
+    expect(t.pipeline.pendingTask?.prompt).toBe('build it');
+  });
+
+  it('never uses the classifier\'s answer when the prompt references files the classifier did not see', async () => {
+    const t = setup({ classifier: { complexity: 'trivial', answer: 'a guess' } });
+    writeFileSync(join(t.cwd, 'a.txt'), 'hello');
+    await t.pipeline.runTask('explain @a.txt', { autoApprove: true });
+    expect(t.pipeline.lastReplyText).not.toBe('a guess');
+    expect(t.executors()).toHaveLength(1);
+  });
+
+  it('small talk follows a forced model instead of silently using Haiku', async () => {
+    const t = setup();
+    t.pipeline.forceModel('opus');
+    await t.pipeline.runTask('hey');
+    expect(t.calls.map((c) => c.role)).toEqual(['classifier', 'executor']);
+    expect(t.executors()[0]?.model).toBe('opus');
+  });
+
+  it('records the classifier\'s own tier when it answers', async () => {
+    const t = setup({ classifier: { complexity: 'trivial', answer: 'yes' }, config: (c) => { c.routing.classifier = 'sonnet'; } });
+    const res = await t.pipeline.runTask('is water wet?');
+    expect(res.steps[0]).toMatchObject({ tier: 'sonnet', model: 'sonnet' });
+  });
+
+  it('waits for the background snapshot before finishing, so the next task cannot collide with it', async () => {
+    let finished = false;
+    const cp: Checkpointer = {
+      available: true, root: '/', prefix: '',
+      snapshot: async () => { await new Promise((r) => setTimeout(r, 40)); finished = true; return 't'; },
+      changes: async () => null, diff: async () => null, restore: async () => null, dispose: () => undefined,
+    };
+    const t = setup({ checkpoints: cp, classifier: { complexity: 'trivial', answer: 'four' } });
+    await t.pipeline.runTask('what is 2+2?'); // answered before the snapshot is needed
+    expect(finished).toBe(true);
+  });
+
+  it('gives a hard step of a written plan the effort bump without sending it to Opus', async () => {
+    const t = setup({ complexities: ['large_build'], classifier: { difficulty: 'hard' } });
+    await t.pipeline.runTask('build a compiler', { autoApprove: true });
+    expect(t.executors().map((c) => c.model)).toEqual(['sonnet', 'sonnet']);
+    expect(t.executors().map((c) => c.effort)).toEqual(['high', 'high']);
+  });
+
+  it('retries a failed lean call normally on any claude error, then stops using lean flags if that works', async () => {
+    const seen: (boolean | undefined)[] = [];
+    const config = defaultConfig();
+    config.verify.auto = false;
+    config.review.enabled = false;
+    const ok = { isError: false, subtype: 'success', text: 'ok', usage: emptyUsage(), sessionId: 's', numTurns: 1 };
+    const run: RunClaudeFn = async (o) => {
+      seen.push(o.lean);
+      if (o.lean) throw new SmartError('claude', 'Claude Code failed: could not reach the configured endpoint');
+      const props = (o.jsonSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+      return props && 'complexity' in props ? { ...ok, structured: { complexity: 'small_edit', needsPlan: false, reason: 'r' } } : { ...ok, structured: undefined };
+    };
+    const p = new Pipeline(config, new EventBus(), mkdtempSync(join(tmpdir(), 'smart-lean2-')), { run, uid: 1000, listFiles: () => [] });
+    const res = await p.runTask('create a.txt');
+    expect(res.classification?.fallback).toBeUndefined(); // classification came from the retried call, not the fallback
+    expect(seen.slice(0, 2)).toEqual([true, undefined]);
+    expect(seen.slice(2).every((v) => !v)).toBe(true);
   });
 });

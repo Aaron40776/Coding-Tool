@@ -48,8 +48,6 @@ export interface TaskOptions {
   autoApprove?: boolean;
   /** Continue the unfinished task from its first unfinished step (skips classify, plan and approve). */
   resume?: boolean;
-  /** Treat greetings like any other task (tests). */
-  noSmallTalk?: boolean;
 }
 
 export interface TaskSummary {
@@ -107,16 +105,18 @@ export class Pipeline {
           o.onEvent?.(e);
         },
       });
-    // Tool-less calls (classify, plan, review, small talk) start `claude` lean. If that breaks a login that lives in a
-    // settings file (apiKeyHelper), retry once the normal way and stop using lean flags for this session.
+    // Tool-less calls (classify, plan, review, small talk) start `claude` lean. If that breaks something that lives in the
+    // settings files (an apiKeyHelper login, a provider or proxy in `env`), retry once the normal way; when that works,
+    // stop using lean flags for this session. If the normal call fails too, lean was not the problem and stays on.
     this.run = async (o) => {
       if (!this.leanOk || !config.runner.leanCalls || o.tools?.length !== 0) return call(o);
       try {
         return await call({ ...o, lean: true });
       } catch (e) {
-        if (!(e instanceof SmartError) || e.kind !== 'auth') throw e;
+        if (!(e instanceof SmartError) || (e.kind !== 'auth' && e.kind !== 'claude')) throw e;
+        const res = await call(o);
         this.leanOk = false;
-        return call(o);
+        return res;
       }
     };
   }
@@ -200,6 +200,7 @@ export class Pipeline {
     this.overhead = emptyUsage();
     const touched: string[] = [];
     let startTree: string | null = null;
+    let snapshotting: Promise<string | null> | null = null;
     const doneRef: { ids: Set<string> } = { ids: new Set() };
     this.lastReply = '';
 
@@ -219,13 +220,13 @@ export class Pipeline {
       const referenced = resolveMentions(this.cwd, prompt, this.config.limits.maxContextBytes);
       if (referenced.length) emit({ type: 'notice', level: 'info', message: `Using ${referenced.length} referenced file${referenced.length === 1 ? '' : 's'}: ${referenced.map((f) => f.path).join(', ')}` });
       // Greetings skip the git snapshot, classifier and Claude Code session entirely.
-      if (!dryRun && !opts.resume && !opts.noSmallTalk && !referenced.length && isSmallTalk(prompt)) return await this.respond(prompt, summary, { startedAt, memory, at, stage, touched });
+      if (!dryRun && !opts.resume && !this.forced && !referenced.length && isSmallTalk(prompt)) return await this.respond(prompt, summary, { startedAt, memory, at, stage, touched });
       if (!dryRun && !this.cp.available && !this.warnedNoGit) {
         this.warnedNoGit = true;
         emit({ type: 'notice', level: 'info', message: 'Not a git repository, so /undo and /diff are unavailable here. Run `git init` to enable them.' });
       }
       // The git snapshot runs while the classifier and planner think; it is only needed before the first file is touched.
-      const snapshotting = dryRun ? Promise.resolve(null) : this.cp.snapshot().catch(() => null);
+      snapshotting = dryRun ? Promise.resolve(null) : this.cp.snapshot().catch(() => null);
       const signal = this.ctl.signal;
 
       const resumed = opts.resume ? this.conv.pending : undefined;
@@ -255,7 +256,7 @@ export class Pipeline {
         stage('classify', 'done');
 
         // A pure question the classifier could answer on the spot needs no coding session: one call in total.
-        if (classification.answer && !this.forced && !dryRun) {
+        if (classification.answer && !this.forced && !dryRun && !referenced.length) {
           return await this.respond(prompt, summary, { startedAt, memory, at, stage, touched }, { classification, text: classification.answer });
         }
 
@@ -298,7 +299,7 @@ export class Pipeline {
         }
       }
 
-      startTree = await snapshotting;
+      startTree = await snapshotting!;
 
       // 4. execute (+ verify per step)
       at('execute');
@@ -333,6 +334,8 @@ export class Pipeline {
       summary.ok = false;
       return await this.finish(summary, { startedAt, prompt, touched, startTree, aborted: true, doneIds: doneRef.ids });
     } finally {
+      // An early exit (a direct answer, a cancel) must not leave a snapshot running on the shared temporary index: the next task would collide with it.
+      await snapshotting?.catch(() => null);
       this.running = false;
       this.ctl = null;
       this.approval = null;
@@ -350,9 +353,9 @@ export class Pipeline {
     ready?: { classification: Classification; text: string },
   ): Promise<TaskSummary> {
     const emit = this.bus.emit.bind(this.bus);
-    const tier: ModelTier = 'haiku';
+    const tier: ModelTier = ready ? this.config.routing.classifier : 'haiku';
     const decision: RouteDecision = ready
-      ? { tier, model: this.config.models[this.config.routing.classifier], reason: 'answered by the classifier: no second call' }
+      ? { tier, model: this.config.models[tier], reason: 'answered by the classifier: no second call' }
       : { tier, model: this.config.models[tier], reason: 'small talk: no classification, no tools' };
     const classification: Classification = ready?.classification ?? { complexity: 'trivial', needsPlan: false, reason: 'Small talk.' };
     const plan = singleStepPlan(prompt);
@@ -621,7 +624,7 @@ export class Pipeline {
       rec.attempts += 1;
       rec.tier = tier;
       rec.model = decision.model;
-      const effort = pickEffort({ tier, complexity: stepClass.complexity, difficulty: stepClass.difficulty, failuresOnTier, config: this.config });
+      const effort = pickEffort({ tier, complexity: classification.complexity, difficulty: classification.difficulty, failuresOnTier, config: this.config });
       if (effort) decision = { ...decision, reason: `${decision.reason.replace(/ · effort \w+$/, '')} · effort ${effort}` };
       emit({ type: 'stage', stage: 'verify', status: 'pending' });
       emit({ type: 'step:start', stepId: step.id, title: step.title, route: decision, attempt: rec.attempts, at: this.now() });
@@ -750,7 +753,7 @@ export class Pipeline {
     }
     // A task that stopped after planning can be continued with /resume; a finished one clears that.
     if (!summary.dryRun) {
-      const unfinished = !summary.ok && summary.plan && summary.classification && summary.steps.some((x) => x.outcome !== 'skipped');
+      const unfinished = !f.keepPending && !summary.ok && summary.plan && summary.classification && summary.steps.some((x) => x.outcome !== 'skipped');
       if (unfinished) {
         this.conv.pending = { prompt, classification: summary.classification!, plan: summary.plan!, doneStepIds: [...(f.doneIds ?? [])], at: startedAt };
       } else if (summary.ok && !f.keepPending) {
