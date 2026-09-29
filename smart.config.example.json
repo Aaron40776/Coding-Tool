@@ -12,7 +12,7 @@
   "escalation": { "retriesPerModel": 1, "ladder": ["haiku", "sonnet", "opus"] },
   "limits": { "maxPlanSteps": 8, "maxContextBytes": 40000, "maxBudgetUsdPerStep": null, "maxBudgetUsdPerTask": null },
   "session": { "resume": true, "cacheTtlSec": 300, "keepWarmTier": true },
-  "runner": { "permissionMode": "bypassPermissions", "bare": false, "extraArgs": [], "effort": {} },
+  "runner": { "permissionMode": "bypassPermissions", "bare": false, "leanCalls": true, "extraArgs": [], "effort": {} },
   "usage": { "downshiftAt": 0.9, "warnAt": 0.8 },
   "pricing": { "haiku": { "input": 1, "output": 5 }, "sonnet": { "input": 3, "output": 15 }, "opus": { "input": 5, "output": 25 } },
   "verify": { "auto": true, "commands": [], "timeoutSec": 300 },

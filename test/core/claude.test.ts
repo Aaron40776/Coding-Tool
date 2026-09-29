@@ -70,6 +70,13 @@ describe('StreamParser', () => {
 });
 
 describe('buildArgs / resolvePermissionMode', () => {
+  it('lean skips settings, MCP servers and skills; off by default', () => {
+    const lean = buildArgs({ prompt: 'x', model: 'haiku', cwd: '.', tools: [], lean: true });
+    expect(lean).toEqual(expect.arrayContaining(['--strict-mcp-config', '--disable-slash-commands']));
+    expect(lean[lean.indexOf('--setting-sources') + 1]).toBe('');
+    expect(buildArgs({ prompt: 'x', model: 'haiku', cwd: '.' })).not.toContain('--strict-mcp-config');
+  });
+
   it('builds headless flags', () => {
     const args = buildArgs({ prompt: 'x', model: 'haiku', cwd: '.', tools: [], systemPrompt: 'sys', jsonSchema: { type: 'object' }, permissionMode: 'acceptEdits', bare: true, maxBudgetUsd: 1, extraArgs: ['--foo'] });
     expect(args).toEqual(expect.arrayContaining(['-p', '--model', 'haiku', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--tools', '', '--system-prompt', 'sys', '--permission-mode', 'acceptEdits', '--bare', '--max-budget-usd', '1', '--foo']));

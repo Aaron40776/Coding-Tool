@@ -10,6 +10,7 @@ import { EventBus, type Stage } from './events.js';
 import { SmartError, cancelled, isCancelled } from './errors.js';
 import { projectContext, projectFiles } from './files.js';
 import { resolveMentions } from './mentions.js';
+import { CHAT_SYSTEM, isSmallTalk } from './smalltalk.js';
 import { makePlan, singleStepPlan } from './planner.js';
 import { applyWarmCache, route } from './router.js';
 import { reviewStep } from './review.js';
@@ -46,6 +47,8 @@ export interface TaskOptions {
   autoApprove?: boolean;
   /** Continue the unfinished task from its first unfinished step (skips classify, plan and approve). */
   resume?: boolean;
+  /** Treat greetings like any other task (tests). */
+  noSmallTalk?: boolean;
 }
 
 export interface TaskSummary {
@@ -82,6 +85,7 @@ export class Pipeline {
   private readonly cp: Checkpointer;
   private limits: Limits | null;
   private warnedWindows = new Set<string>();
+  private leanOk = true;
   /** Every Claude call goes through here so account usage reported in any stream is captured. */
   private readonly run: RunClaudeFn;
 
@@ -94,7 +98,7 @@ export class Pipeline {
     this.conv = deps.conversation ?? newConversation();
     this.cp = deps.checkpoints ?? new NoCheckpoints();
     this.limits = deps.limits ?? null;
-    this.run = (o) =>
+    const call = (o: Parameters<RunClaudeFn>[0]) =>
       deps.run({
         ...o,
         onEvent: (e) => {
@@ -102,6 +106,18 @@ export class Pipeline {
           o.onEvent?.(e);
         },
       });
+    // Tool-less calls (classify, plan, review, small talk) start `claude` lean. If that breaks a login that lives in a
+    // settings file (apiKeyHelper), retry once the normal way and stop using lean flags for this session.
+    this.run = async (o) => {
+      if (!this.leanOk || !config.runner.leanCalls || o.tools?.length !== 0) return call(o);
+      try {
+        return await call({ ...o, lean: true });
+      } catch (e) {
+        if (!(e instanceof SmartError) || e.kind !== 'auth') throw e;
+        this.leanOk = false;
+        return call(o);
+      }
+    };
   }
 
   // ---- commands from the frontend -------------------------------------------------------
@@ -201,6 +217,8 @@ export class Pipeline {
       const memory = renderMemory(this.conv);
       const referenced = resolveMentions(this.cwd, prompt, this.config.limits.maxContextBytes);
       if (referenced.length) emit({ type: 'notice', level: 'info', message: `Using ${referenced.length} referenced file${referenced.length === 1 ? '' : 's'}: ${referenced.map((f) => f.path).join(', ')}` });
+      // Greetings skip the git snapshot, classifier and Claude Code session entirely.
+      if (!dryRun && !opts.resume && !opts.noSmallTalk && !referenced.length && isSmallTalk(prompt)) return await this.smallTalk(prompt, summary, { startedAt, memory, at, stage, touched });
       if (!dryRun && !this.cp.available && !this.warnedNoGit) {
         this.warnedNoGit = true;
         emit({ type: 'notice', level: 'info', message: 'Not a git repository, so /undo and /diff are unavailable here. Run `git init` to enable them.' });
@@ -313,6 +331,53 @@ export class Pipeline {
   }
 
   // ---- internals --------------------------------------------------------------------------
+
+  /** "hey", "thanks": one short tool-less Haiku call instead of classify + a full Claude Code session. */
+  private async smallTalk(
+    prompt: string,
+    summary: TaskSummary,
+    x: { startedAt: string; memory: string; at: (s: Stage) => void; stage: (s: Stage, st: 'active' | 'done' | 'skipped' | 'failed') => void; touched: string[] },
+  ): Promise<TaskSummary> {
+    const emit = this.bus.emit.bind(this.bus);
+    const tier: ModelTier = 'haiku';
+    const decision: RouteDecision = { tier, model: this.config.models[tier], reason: 'small talk: no classification, no tools' };
+    const classification: Classification = { complexity: 'trivial', needsPlan: false, reason: 'Small talk.' };
+    const plan = singleStepPlan(prompt);
+    const step = plan.steps[0]!;
+    summary.classification = classification;
+    summary.plan = plan;
+    emit({ type: 'classified', classification, route: decision });
+    x.stage('classify', 'skipped');
+    x.stage('plan', 'skipped');
+    x.stage('approve', 'skipped');
+    emit({ type: 'plan:ready', plan, routes: { [step.id]: decision } });
+    x.at('execute');
+    emit({ type: 'step:start', stepId: step.id, title: 'Reply', route: decision, attempt: 1, at: this.now() });
+    const rec: StepRecord = { stepId: step.id, title: 'Reply', model: decision.model, tier, attempts: 1, escalated: false, usage: emptyUsage(), outcome: 'failed' };
+    try {
+      const res = await this.run({
+        prompt: x.memory ? `<conversation>\n${x.memory}\n</conversation>\n\n${prompt}` : prompt,
+        model: decision.model, systemPrompt: CHAT_SYSTEM, tools: [], cwd: this.cwd, signal: this.ctl!.signal,
+      });
+      this.lastReply = res.text.trim();
+      rec.usage = res.usage;
+      this.taskUsage = addUsage(this.taskUsage, res.usage);
+      emit({ type: 'step:output', stepId: step.id, kind: 'text', text: this.lastReply });
+      emit({ type: 'tokens', stepId: step.id, usage: res.usage, sessionTotal: this.sessionTotal });
+      rec.outcome = 'done';
+      emit({ type: 'step:done', stepId: step.id, at: this.now() });
+    } catch (e) {
+      if (isCancelled(e)) throw e;
+      if (e instanceof SmartError && e.kind !== 'claude') throw e;
+      emit({ type: 'step:failed', stepId: step.id, error: (e as Error).message, at: this.now() });
+    }
+    summary.steps.push(rec);
+    summary.ok = rec.outcome === 'done';
+    x.stage('verify', 'skipped');
+    x.stage('execute', summary.ok ? 'done' : 'failed');
+    // A greeting between a failed task and /resume must not throw the unfinished task away.
+    return this.finish(summary, { startedAt: x.startedAt, prompt, touched: x.touched, startTree: null, keepPending: true });
+  }
 
   private announce(): void {
     if (this.announced) return;
@@ -639,7 +704,7 @@ export class Pipeline {
 
   private async finish(
     summary: TaskSummary,
-    f: { startedAt: string; prompt: string; touched: string[]; startTree: string | null; aborted?: boolean; doneIds?: Set<string> },
+    f: { startedAt: string; prompt: string; touched: string[]; startTree: string | null; aborted?: boolean; doneIds?: Set<string>; keepPending?: boolean },
   ): Promise<TaskSummary> {
     const { startedAt, prompt, aborted = false } = f;
     const overhead = this.overhead;
@@ -660,7 +725,7 @@ export class Pipeline {
       const unfinished = !summary.ok && summary.plan && summary.classification && summary.steps.some((x) => x.outcome !== 'skipped');
       if (unfinished) {
         this.conv.pending = { prompt, classification: summary.classification!, plan: summary.plan!, doneStepIds: [...(f.doneIds ?? [])], at: startedAt };
-      } else if (summary.ok) {
+      } else if (summary.ok && !f.keepPending) {
         delete this.conv.pending;
       }
     }

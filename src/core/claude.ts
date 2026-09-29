@@ -179,6 +179,11 @@ export interface RunClaudeOptions {
   tools?: string[];
   permissionMode?: string;
   bare?: boolean;
+  /**
+   * For tool-less calls: skip user/project settings (hooks, plugins), MCP servers and skills. They cannot matter without
+   * tools, but each one slows every `claude` start-up.
+   */
+  lean?: boolean;
   maxBudgetUsd?: number | null;
   extraArgs?: string[];
   onEvent?: (e: ClaudeStreamEvent) => void;
@@ -198,6 +203,7 @@ export function buildArgs(o: RunClaudeOptions): string[] {
   if (o.jsonSchema) args.push('--json-schema', JSON.stringify(o.jsonSchema));
   if (o.permissionMode) args.push('--permission-mode', o.permissionMode);
   if (o.bare) args.push('--bare');
+  if (o.lean) args.push('--strict-mcp-config', '--disable-slash-commands', '--setting-sources', '');
   if (o.maxBudgetUsd) args.push('--max-budget-usd', String(o.maxBudgetUsd));
   if (o.extraArgs?.length) args.push(...o.extraArgs);
   return args;
