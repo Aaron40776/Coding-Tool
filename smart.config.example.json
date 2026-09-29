@@ -1,0 +1,17 @@
+{
+  "models": { "haiku": "haiku", "sonnet": "sonnet", "opus": "opus" },
+  "routing": {
+    "trivial": "haiku",
+    "small_edit": "sonnet",
+    "multi_file": "sonnet",
+    "large_build": "sonnet",
+    "planner": "opus",
+    "classifier": "haiku",
+    "keywordRules": [{ "match": "architecture|race condition|deadlock", "tier": "opus" }]
+  },
+  "escalation": { "retriesPerModel": 1, "ladder": ["haiku", "sonnet", "opus"] },
+  "limits": { "maxPlanSteps": 8, "maxContextBytes": 40000, "maxBudgetUsdPerStep": null },
+  "runner": { "permissionMode": "bypassPermissions", "bare": false, "extraArgs": [] },
+  "verify": { "auto": true, "commands": [] },
+  "trackerPath": "~/.smart/history.json"
+}
