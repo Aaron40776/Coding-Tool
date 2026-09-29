@@ -12,7 +12,7 @@
   "escalation": { "retriesPerModel": 1, "ladder": ["haiku", "sonnet", "opus"] },
   "limits": { "maxPlanSteps": 8, "maxContextBytes": 40000, "maxBudgetUsdPerStep": null, "maxBudgetUsdPerTask": null },
   "session": { "resume": true, "cacheTtlSec": 300, "keepWarmTier": true },
-  "runner": { "permissionMode": "bypassPermissions", "bare": false, "leanCalls": true, "extraArgs": [], "effort": {} },
+  "runner": { "permissionMode": "bypassPermissions", "bare": false, "leanCalls": true, "autoEffort": true, "extraArgs": [], "effort": {} },
   "usage": { "downshiftAt": 0.9, "warnAt": 0.8 },
   "verify": { "auto": true, "commands": [], "timeoutSec": 300 },
   "trackerPath": "~/.smart/history.json"

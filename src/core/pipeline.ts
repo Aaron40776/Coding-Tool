@@ -10,6 +10,7 @@ import { EventBus, type Stage } from './events.js';
 import { SmartError, cancelled, isCancelled } from './errors.js';
 import { projectContext, projectFiles } from './files.js';
 import { resolveMentions } from './mentions.js';
+import { pickEffort, planEffort } from './effort.js';
 import { CHAT_SYSTEM, isSmallTalk } from './smalltalk.js';
 import { makePlan, singleStepPlan } from './planner.js';
 import { applyWarmCache, route } from './router.js';
@@ -257,7 +258,7 @@ export class Pipeline {
         if (wantPlan) {
           at('plan');
           const p = await makePlan(prompt, classification, {
-            config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(), memory,
+            config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(), memory, effort: planEffort(classification.complexity, this.config),
             projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd), referenced,
           });
           this.addCallUsage(p.usage);
@@ -595,6 +596,8 @@ export class Pipeline {
       rec.attempts += 1;
       rec.tier = tier;
       rec.model = decision.model;
+      const effort = pickEffort({ tier, complexity: classification.complexity, failuresOnTier, config: this.config });
+      if (effort) decision = { ...decision, reason: `${decision.reason.replace(/ · effort \w+$/, '')} · effort ${effort}` };
       emit({ type: 'stage', stage: 'verify', status: 'pending' });
       emit({ type: 'step:start', stepId: step.id, title: step.title, route: decision, attempt: rec.attempts, at: this.now() });
       a.current('execute');
@@ -610,7 +613,7 @@ export class Pipeline {
         const res = await runStep({
           plan, step, index, total, touchedFiles: touched, failure, memory: memory || undefined, note: note || undefined, referenced: index === 0 ? a.referenced : undefined,
           session: sessionId ? { id: sessionId, resume: resuming } : undefined,
-          effort: this.config.runner.effort[tier],
+          effort,
           config: this.config, cwd: this.cwd, run: this.run, route: decision, permissionMode: perm.mode, signal,
           onOutput: (kind, text) => {
             if (kind === 'text') this.lastReply = text;

@@ -68,6 +68,8 @@ const ConfigSchema = z.object({
       bare: z.boolean().default(false),
       /** Classify, plan and review calls have no tools, so they skip hooks, plugins and MCP servers (faster start-up). */
       leanCalls: z.boolean().default(true),
+      /** Pick the thinking effort per step from the task (cheap for easy work, more for hard). An explicit `effort` below wins. */
+      autoEffort: z.boolean().default(true),
       extraArgs: z.array(z.string()).default([]),
       /** Optional `--effort` level per model tier, e.g. { "haiku": "low", "opus": "high" }. Unset = Claude Code default. */
       effort: z.object({ haiku: effort.optional(), sonnet: effort.optional(), opus: effort.optional() }).default({}),

@@ -105,6 +105,8 @@ export interface PlanContext {
   memory?: string;
   /** The project's own instructions and package info (see projectContext). */
   context?: string;
+  /** Thinking effort for the planner call (see planEffort). */
+  effort?: string;
   /** Files the user referenced with @path in the request. */
   referenced?: { path: string; content: string; truncated: boolean }[];
 }
@@ -133,6 +135,7 @@ export async function makePlan(prompt: string, classification: Classification, c
       systemPrompt: PLANNER_SYSTEM,
       jsonSchema: plannerSchema(maxPlanSteps),
       tools: [],
+      effort: ctx.effort,
       bare: ctx.config.runner.bare,
     });
     const parsed = parsePlan(structuredFrom(result), maxPlanSteps);

@@ -123,6 +123,9 @@ Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prom
 - While that session's prompt cache is warm, follow-ups are not downgraded to a model whose cache would start cold
   (re-reading the history at full price costs more than it saves). See [ROUTING.md](ROUTING.md#conversations-and-follow-ups).
 - Work goes to the cheapest model that passes your checks; failures escalate one tier at a time.
+- **Effort follows the task too.** Each coding step gets a thinking-effort level to match: `low` for trivial and small edits, `medium` for multi-file work and large builds,
+  one level higher on Opus and after a failed attempt (think harder before paying for a bigger model); the Opus planner runs at `high` for large builds. Haiku gets none.
+  It is shown next to the model (`multi_file → sonnet · effort medium`). Set `runner.effort` per model to pin a level, or `"autoEffort": false` to leave Claude Code's default.
 - The planner is instructed to be terse and to add nothing you did not ask for.
 
 What it does not do: shrink Claude Code's own base context (its system prompt and tool definitions, roughly 30k tokens per call in my measurements).
@@ -133,6 +136,9 @@ Claude Code in `--bare` mode to skip hooks, plugins and `CLAUDE.md` discovery. C
 
 `./smart.config.json`, then `~/.smart/smart.config.json`, then built-in defaults. Only set what you want to change.
 See [`smart.config.example.json`](smart.config.example.json) and **[ROUTING.md](ROUTING.md)** for what every rule does and how to tune it.
+
+**Slow? Find out why.** `SMART_DEBUG=1 smart` (PowerShell: `$env:SMART_DEBUG=1; smart`) appends one line per `claude` call to `~/.smart/debug.log` with how long Claude Code took to start up
+(`startupUntilReady`), to the first text, and in total, so you can tell Claude Code's own start-up (plugins, hooks, MCP servers) from the model.
 
 History is written to `~/.smart/history.json` (`trackerPath`). Unknown keys in a config file and risky project-local settings
 (`verify.commands`, `runner.extraArgs` in a `smart.config.json` that came with a repo) produce a warning at startup, so a cloned repo cannot silently run commands.
