@@ -19,8 +19,17 @@ export interface PlanApprovalProps {
   width?: number;
 }
 
+/** Below this many inner rows the screen drops its summary, spacers and detail border so the essentials still fit. */
+export const COMPACT_BELOW = 14;
+
 /** Splits the available rows between the step list and the detail box. Exported for tests. */
 export function budget(inner: number, summaryLines: number, steps: number, hasWarning: boolean): { list: number; detail: number } {
+  if (inner < COMPACT_BELOW) {
+    // title + list + detail + hint (+ warning): nothing else
+    const room = Math.max(2, inner - 2 - (hasWarning ? 1 : 0));
+    const list = Math.max(1, Math.min(steps, Math.floor(room / 2)));
+    return { list, detail: Math.max(1, room - list) };
+  }
   // title + summary + blank + blank + detail borders(2) + hint (+ warning)
   const fixed = 1 + summaryLines + 1 + 1 + 2 + 1 + (hasWarning ? 1 : 0);
   const room = Math.max(2, inner - fixed);
@@ -71,10 +80,11 @@ export function PlanApproval({ plan, routes, onApprove, onCancel, height = 24, w
 
   const { steps, cursor, edit, warning, dscroll } = get();
   const W = Math.max(20, width - 4); // inside the outer border + padding
-  const DW = Math.max(16, W - 4); // inside the detail box border + padding
+  const DW = Math.max(16, W - (height - 2 < COMPACT_BELOW ? 0 : 4)); // inside the detail box border + padding (none when compact)
   const summary = wrapText(plan.summary, W);
-  const summaryLines = summary.slice(0, 2);
-  if (summary.length > 2) summaryLines[1] = `${summaryLines[1]!.slice(0, Math.max(0, W - 1))}…`;
+  const compact = height - 2 < COMPACT_BELOW;
+  const summaryLines = compact ? [] : summary.slice(0, 2);
+  if (!compact && summary.length > 2) summaryLines[1] = `${summaryLines[1]!.slice(0, Math.max(0, W - 1))}…`;
   const { list, detail } = budget(height - 2, summaryLines.length, steps.length, Boolean(warning));
 
   const sel = steps[cursor];
@@ -112,8 +122,8 @@ export function PlanApproval({ plan, routes, onApprove, onCancel, height = 24, w
         <Text dimColor>{`  step ${cursor + 1} of ${steps.length}${steps.some((s) => s.skipped) ? ` · ${steps.filter((s) => s.skipped).length} skipped` : ''}`}</Text>
       </Text>
       {summaryLines.map((l, i) => <Text key={i} dimColor wrap="truncate-end">{l}</Text>)}
-      <Text> </Text>
-      <Box flexDirection="column" height={list}>
+      {compact ? null : <Text> </Text>}
+      <Box flexDirection="column" height={list} flexShrink={0}>
         {visible.map((s, k) => {
           const i = winStart + k;
           const route = routes[s.id];
@@ -138,8 +148,8 @@ export function PlanApproval({ plan, routes, onApprove, onCancel, height = 24, w
           );
         })}
       </Box>
-      <Text> </Text>
-      <Box flexDirection="column" borderStyle="single" borderColor={editing ? 'yellow' : 'gray'} paddingX={1} height={detail + 2}>
+      {compact ? null : <Text> </Text>}
+      <Box flexDirection="column" borderStyle={compact ? undefined : 'single'} borderColor={editing ? 'yellow' : 'gray'} paddingX={compact ? 0 : 1} height={compact ? detail : detail + 2} flexShrink={0}>
         {shown.map((c, i) => (
           <Text key={i} wrap="truncate-end" bold={c.style === 'title'} dimColor={c.style === 'dim'} color={c.style === 'edit' ? 'yellow' : undefined}>{c.text}</Text>
         ))}

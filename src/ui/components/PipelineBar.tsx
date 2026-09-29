@@ -26,18 +26,18 @@ function Icon({ status, still }: { status: StageStatus; still?: boolean }) {
 }
 
 /** classify → plan → execute → verify. Approval is shown as part of the plan stage. */
-export function PipelineBar({ stages }: { stages: Record<Stage, StageStatus> }) {
+export function PipelineBar({ stages, compact }: { stages: Record<Stage, StageStatus>; compact?: boolean }) {
   const status = (s: Stage): StageStatus => (s === 'plan' && stages.approve === 'active' ? 'active' : stages[s]);
   return (
     <Box>
       {SHOWN.map(({ stage, label }, i) => {
         const st = status(stage);
         return (
-          <Box key={stage}>
-            {i > 0 ? <Text dimColor>{' → '}</Text> : null}
+          <Box key={stage} flexShrink={0}>
+            {i > 0 ? <Box flexShrink={0}><Text dimColor>{compact ? '→' : ' → '}</Text></Box> : null}
             <Icon status={st} still={stage === 'plan' && stages.approve === 'active'} />
             <Text bold={st === 'active'} dimColor={st === 'pending' || st === 'skipped'}>{` ${label}`}</Text>
-            {stage === 'plan' && stages.approve === 'active' ? <Text color="yellow"> (review)</Text> : null}
+            {stage === 'plan' && stages.approve === 'active' && !compact ? <Text color="yellow"> (review)</Text> : null}
           </Box>
         );
       })}

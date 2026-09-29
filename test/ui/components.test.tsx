@@ -66,6 +66,12 @@ describe('CostMeter', () => {
 });
 
 describe('PipelineBar', () => {
+  it('compact mode drops the review label so the bar fits narrow terminals', () => {
+    const f = render(<PipelineBar stages={{ ...initialStages(), classify: 'done', approve: 'active' }} compact />).lastFrame()!;
+    expect(f).not.toContain('(review)');
+    expect(f).toContain('classify');
+    expect(f).toContain('verify');
+  });
   it('shows all four stages with status marks', () => {
     const f = render(<PipelineBar stages={{ ...initialStages(), classify: 'done', plan: 'failed', execute: 'skipped' }} />).lastFrame()!;
     for (const s of ['classify', 'plan', 'execute', 'verify']) expect(f).toContain(s);
@@ -430,6 +436,27 @@ describe('PlanApproval: long plans on small terminals (regression)', () => {
     expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(w);
     expect(f).toContain('Esc cancel');
     expect(f).toContain('Review plan');
+  });
+
+  it.each([[50, 8], [50, 10], [60, 12], [80, 13]])('compact layout at %ix%i keeps the title, selected step, detail and key hints', (w, h) => {
+    const f = render(<PlanApproval plan={bigPlan} routes={routes9} onApprove={() => undefined} onCancel={() => undefined} width={w} height={h} />).lastFrame()!;
+    const lines = f.split('\n');
+    expect(lines.length).toBeLessThanOrEqual(h);
+    expect(f).toContain('Review plan');
+    expect(f).toContain('▸ [x] 1.');
+    expect(f).toContain('Esc cancel');
+    expect(f).toMatch(/Implement the game loop|A rather long step title/); // some detail text is visible
+  });
+
+  it('budget() in compact mode never exceeds the rows either', () => {
+    for (let inner = 4; inner < 14; inner++) {
+      for (const steps of [1, 3, 9]) {
+        const { list, detail } = budget(inner, 0, steps, false);
+        expect(list).toBeGreaterThanOrEqual(1);
+        expect(detail).toBeGreaterThanOrEqual(1);
+        if (inner >= 5) expect(1 + list + detail + 1).toBeLessThanOrEqual(inner);
+      }
+    }
   });
 
   it('shows the full text of a step by scrolling instead of cutting it off', async () => {

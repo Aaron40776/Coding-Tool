@@ -239,7 +239,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
         </Box>
       </Box>
       <Box paddingX={1}>
-        <PipelineBar stages={state.stages} />
+        <PipelineBar stages={state.stages} compact={size.cols < 70} />
       </Box>
       {state.phase === 'approval' && state.plan ? (
         <PlanApproval plan={state.plan} routes={state.routes} onApprove={(p) => pipeline.approvePlan(p)} onCancel={() => pipeline.cancel()} height={mainHeight} width={size.cols} />
