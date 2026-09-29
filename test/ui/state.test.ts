@@ -139,6 +139,12 @@ describe('reduce', () => {
     expect(text.slice(4)).toEqual(['diff-meta|diff --git a/a.js b/a.js', 'diff-meta|@@ -1 +1 @@', 'diff-del|-old', 'diff-add|+new', 'diff-ctx| context']);
   });
 
+  it('keeps the latest account limits', () => {
+    const limits = { at: 5, windows: { five_hour: { utilization: 0.5 } } };
+    expect(reduce(initialState(), { type: 'limits', limits }).limits).toEqual(limits);
+    expect(initialState().limits).toBeNull();
+  });
+
   it('caps a huge diff', () => {
     const big = Array.from({ length: 400 }, (_, i) => `+line ${i}`).join('\n');
     const s = reduce(initialState(), { type: 'diff', text: big });
@@ -163,6 +169,10 @@ describe('parseInput', () => {
     expect(parseInput('/quit')).toEqual({ kind: 'quit' });
     expect(parseInput('/new')).toEqual({ kind: 'new' });
     expect(parseInput('/undo')).toEqual({ kind: 'undo' });
+    expect(parseInput('/usage')).toEqual({ kind: 'usage' });
+    expect(parseInput('/limits')).toEqual({ kind: 'usage' });
+    expect(parseInput('/cost')).toEqual({ kind: 'cost' });
+    expect(parseInput('/config')).toEqual({ kind: 'config' });
     expect(parseInput('/diff')).toEqual({ kind: 'diff' });
     expect(parseInput('/mode')).toEqual({ kind: 'mode', mode: 'show' });
     expect(parseInput('/mode plan')).toEqual({ kind: 'mode', mode: 'plan' });

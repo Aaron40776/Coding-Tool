@@ -2,7 +2,7 @@ import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { authError, cancelled, cliMissing, SmartError } from './errors.js';
-import { emptyUsage, type Usage } from './types.js';
+import { emptyUsage, type LimitWindow, type Usage } from './types.js';
 
 /** Normalised view of Claude Code's `--output-format stream-json` events. */
 export type ClaudeStreamEvent =
@@ -10,6 +10,7 @@ export type ClaudeStreamEvent =
   | { kind: 'text'; text: string }
   | { kind: 'tool'; name: string; summary: string; /** Set for tools that modify a file. */ writtenFile?: string }
   | { kind: 'progress'; inputTokens: number; outputTokens: number; cacheReadTokens: number }
+  | { kind: 'limits'; windows: Record<string, LimitWindow>; status?: string }
   | { kind: 'result'; result: ClaudeResult };
 
 export interface ClaudeResult {
@@ -96,6 +97,16 @@ export class StreamParser {
         return d.subtype === 'init' ? [{ kind: 'init', model: str(d.model), sessionId: str(d.session_id) }] : [];
       case 'assistant':
         return this.assistant(d);
+      case 'rate_limit_event': {
+        const info = isObj(d.rate_limit_info) ? d.rate_limit_info : null;
+        const windows: Record<string, LimitWindow> = {};
+        if (info && isObj(info.unifiedWindows)) {
+          for (const [name, w] of Object.entries(info.unifiedWindows)) {
+            if (isObj(w) && typeof w.utilization === 'number') windows[name] = { utilization: w.utilization, resetsAt: typeof w.resetsAt === 'number' ? w.resetsAt : undefined };
+          }
+        }
+        return Object.keys(windows).length > 0 ? [{ kind: 'limits', windows, status: typeof info?.status === 'string' ? info.status : undefined }] : [];
+      }
       case 'result':
         return [
           {

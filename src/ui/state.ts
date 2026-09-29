@@ -1,5 +1,5 @@
 import type { SmartEvent, Stage, StageStatus } from '../core/events.js';
-import type { Classification, ModelTier, Plan, RouteDecision, Usage } from '../core/types.js';
+import type { Classification, Limits, ModelTier, Plan, RouteDecision, Usage } from '../core/types.js';
 import { emptyUsage } from '../core/types.js';
 import { fmtCost, fmtDuration } from './format.js';
 
@@ -37,6 +37,8 @@ export interface UiState {
   stepDuration: Record<string, number>;
   /** Tasks remembered in the current conversation (follow-ups build on them). */
   chatTasks: number;
+  /** Latest account usage windows reported by Claude. */
+  limits: Limits | null;
   nextId: number;
 }
 
@@ -48,7 +50,7 @@ export const initialStages = (): Record<Stage, StageStatus> => ({
 
 export const initialState = (): UiState => ({
   phase: 'idle', prompt: '', dryRun: false, stages: initialStages(), routes: {}, stepStatus: {}, stepAttempt: {},
-  escalatedTo: {}, output: [], session: emptyUsage(), sessionAtTaskStart: emptyUsage(), chatTasks: 0, stepStartedAt: {}, stepDuration: {}, nextId: 1,
+  escalatedTo: {}, output: [], session: emptyUsage(), sessionAtTaskStart: emptyUsage(), chatTasks: 0, limits: null, stepStartedAt: {}, stepDuration: {}, nextId: 1,
 });
 
 const push = (s: UiState, kind: OutputLine['kind'], text: string, stepId?: string): UiState => ({
@@ -154,6 +156,8 @@ export function reduce(s: UiState, e: UiAction): UiState {
       );
     case 'task:done':
       return push({ ...s, phase: 'finished', ok: e.ok }, e.ok ? 'info' : 'error', `${e.ok ? '✓ Done' : '✗ Task did not complete'}${summaryTail(s, e)}`);
+    case 'limits':
+      return { ...s, limits: e.limits };
     case 'conversation':
       return { ...s, chatTasks: e.tasks };
     case 'task:cancelled':

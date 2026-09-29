@@ -43,7 +43,10 @@ smart -c                             # continue the previous conversation in thi
 | `Enter` | send |
 | `Esc` | cancel the running step (or close a view) |
 | `Tab` | switch panel (input / plan / output); `↑ ↓` select or scroll |
-| `/stats` | cost history, per model |
+| `/stats` | usage history: today / 7 days / all time, per-model spend, escalations, estimated savings |
+| `/usage` | your Claude account limits (5-hour and 7-day windows) with reset countdowns |
+| `/cost` | what this session spent, by model |
+| `/config` | the effective routing and safety settings |
 | `/model <haiku\|sonnet\|opus\|auto>` | force a model |
 | `/dry` | toggle dry-run |
 | `/new` | start a fresh conversation (forget earlier tasks) |
@@ -63,6 +66,17 @@ Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prom
 - **Plan checklist:** ticks off as steps finish, with a model badge and the routing reason for each step.
 - **Output:** streamed text and tool calls from Claude Code, verification results, warnings.
 - **Meter:** cost and tokens for this task and for the session.
+
+## Usage stats and limits
+
+- **Your account usage, live.** Claude reports how much of your 5-hour and 7-day allowance is used on every call. `smart` shows it in the header
+  (`5h 74% · 7d 18%`, colored by pressure and remembered between sessions) and in `/usage`, and warns once when a window passes 80%.
+- **Limit-aware routing.** When a window reaches 90% (`usage.downshiftAt`), automatic routing and planning stop choosing Opus (which burns the
+  allowance fastest) and use Sonnet instead, and the reason is shown. `--model`, your per-step choices and escalations after a failure are not affected.
+  Set `"usage": { "downshiftAt": 0 }` to turn this off.
+- **`/stats`** shows spend for today, the last 7 days and all time, cost per model, how often steps escalated, what classify/plan/review cost, your priciest tasks,
+  and an **estimated saving** versus running everything on Sonnet or Opus. Real costs are what Claude Code reports; the comparison prices the same tokens at
+  list prices from `pricing` in your config, so treat it as an estimate. On tiny tasks the overhead can outweigh the saving, and `/stats` says so.
 
 ## Quality and safety
 

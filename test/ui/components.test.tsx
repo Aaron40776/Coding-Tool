@@ -7,11 +7,13 @@ import { PipelineBar } from '../../src/ui/components/PipelineBar.js';
 import { budget, PlanApproval } from '../../src/ui/components/PlanApproval.js';
 import { PlanChecklist } from '../../src/ui/components/PlanChecklist.js';
 import { StatsView } from '../../src/ui/components/StatsView.js';
+import { LimitsMeter } from '../../src/ui/components/LimitsMeter.js';
+import { defaultConfig } from '../../src/core/config.js';
+import { summarize } from '../../src/core/stats.js';
 import { StepBadge } from '../../src/ui/components/StepBadge.js';
 import { fmtCost, fmtDuration, fmtTokens } from '../../src/ui/format.js';
 import { matchCommands } from '../../src/ui/commands.js';
 import { initialStages } from '../../src/ui/state.js';
-import { aggregate } from '../../src/core/tracker.js';
 import { emptyUsage, type Plan, type RouteDecision } from '../../src/core/types.js';
 import { KEYS, wait, waitFor } from './helpers.js';
 
@@ -239,7 +241,8 @@ describe('input features', () => {
   });
 
   it('matchCommands suggests by prefix only for a bare slash word', () => {
-    expect(matchCommands('/')).toEqual(['/stats', '/model', '/dry', '/new', '/undo', '/diff', '/mode', '/help', '/quit']);
+    expect(matchCommands('/')).toEqual(['/stats', '/usage', '/cost', '/config', '/model', '/dry', '/new', '/undo', '/diff', '/mode', '/help', '/quit']);
+    expect(matchCommands('/c')).toEqual(['/cost', '/config']);
     expect(matchCommands('/d')).toEqual(['/dry', '/diff']);
     expect(matchCommands('/st')).toEqual(['/stats']);
     expect(matchCommands('/model opus')).toEqual([]);
@@ -410,17 +413,58 @@ describe('PlanApproval: long plans on small terminals (regression)', () => {
 });
 
 describe('StatsView', () => {
-  it('shows an empty state and a populated breakdown', () => {
-    expect(render(<StatsView stats={aggregate([])} recent={[]} path="/x/h.json" />).lastFrame()).toContain('No tasks recorded yet');
-    const task = {
-      id: 't1', startedAt: '', prompt: 'make a game', overhead: emptyUsage(), ok: true, totals: { ...emptyUsage(), costUsd: 0.25 },
-      steps: [{ stepId: 's1', title: 't', model: 'sonnet', tier: 'sonnet', attempts: 1, escalated: false, usage: { ...emptyUsage(), costUsd: 0.25 }, outcome: 'done' as const }],
-    };
-    const f = render(<StatsView stats={aggregate([task])} recent={[task]} path="/x/h.json" />).lastFrame()!;
-    expect(f).toContain('1 task');
-    expect(f).toContain('$0.25');
+  const pricing = defaultConfig().pricing;
+  const now = Date.now();
+  const mkTask = (id: string, cost: number, model: string, ok = true) => ({
+    id, startedAt: new Date(now - 60_000).toISOString(), prompt: `prompt ${id}`, overhead: { ...emptyUsage(), costUsd: 0.01 }, ok, totals: { ...emptyUsage(), costUsd: cost + 0.01, inputTokens: 1000, outputTokens: 500 },
+    steps: [{ stepId: 's1', title: 't', model, tier: model, attempts: 1, escalated: false, usage: { ...emptyUsage(), costUsd: cost, inputTokens: 100_000, outputTokens: 50_000 }, outcome: 'done' as const }],
+  });
+
+  it('shows an empty state', () => {
+    expect(render(<StatsView summary={summarize([], { now, pricing })} path="/x/h.json" />).lastFrame()).toContain('No tasks recorded yet');
+  });
+
+  it('shows windows, per-model spend, escalations, estimated savings and the priciest tasks', () => {
+    const tasks = [mkTask('a', 0.25, 'sonnet'), mkTask('b', 0.05, 'haiku', false)];
+    const f = render(<StatsView summary={summarize(tasks, { now, pricing })} path="/x/h.json" width={110} />).lastFrame()!;
+    expect(f).toContain('Today');
+    expect(f).toContain('Last 7d');
+    expect(f).toContain('All time');
+    expect(f).toContain('2 tasks');
     expect(f).toContain('sonnet');
-    expect(f).toContain('make a game');
+    expect(f).toContain('haiku');
+    expect(f).toContain('classify · plan · review');
+    expect(f).toContain('Escalated 0 of 2 steps');
+    expect(f).toContain('Estimated savings');
+    expect(f).toContain('vs all-opus');
+    expect(f).toContain('prompt a');
     expect(f).toContain('/x/h.json');
+  });
+
+  it('shows the account limits with bars and reset times when known', () => {
+    const limits = { at: now, windows: { five_hour: { utilization: 0.74, resetsAt: now / 1000 + 8040 }, seven_day: { utilization: 0.18, resetsAt: now / 1000 + 3 * 86400 } } };
+    const f = render(<StatsView summary={summarize([], { now, pricing })} limits={limits} nowMs={now} path="p" width={100} />).lastFrame()!;
+    expect(f).toContain('Your Claude account');
+    expect(f).toContain('5h');
+    expect(f).toContain('74%');
+    expect(f).toContain('resets in 2h 14m');
+    expect(f).toContain('7d');
+  });
+});
+
+describe('LimitsMeter', () => {
+  const now = 1_000_000_000_000;
+  const limits = { at: now, windows: { five_hour: { utilization: 0.74 }, seven_day: { utilization: 0.18 } } };
+  it('shows both windows, or just the tightest in compact mode', () => {
+    const full = render(<LimitsMeter limits={limits} nowMs={now} />).lastFrame()!;
+    expect(full).toContain('5h 74%');
+    expect(full).toContain('7d 18%');
+    const compact = render(<LimitsMeter limits={limits} nowMs={now} compact />).lastFrame()!;
+    expect(compact).toContain('5h 74%');
+    expect(compact).not.toContain('7d');
+  });
+  it('marks old readings with ~ and renders nothing without data', () => {
+    expect(render(<LimitsMeter limits={limits} nowMs={now + 3_600_000} />).lastFrame()).toContain('~5h');
+    expect(render(<LimitsMeter limits={null} nowMs={now} />).lastFrame()).toBe('');
   });
 });

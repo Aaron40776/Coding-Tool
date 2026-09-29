@@ -104,6 +104,35 @@ describe('App', () => {
     await waitFor(() => lastFrame()!.includes('Diff needs a git repository'));
   });
 
+  it('/usage, /cost and /config print account limits, session spend and the effective settings', async () => {
+    const ctx = makeApp({ complexity: 'small_edit' });
+    const { stdin, lastFrame } = render(<App {...ctx} />);
+    await type(stdin, '/usage');
+    await waitFor(() => lastFrame()!.includes('No account usage seen yet'));
+    await type(stdin, '/config');
+    await waitFor(() => lastFrame()!.includes('Routing: trivial→haiku'));
+    expect(lastFrame()).toContain('Escalation: retry 1× per model');
+    await type(stdin, '/cost');
+    await waitFor(() => lastFrame()!.includes('Nothing spent in this session yet'));
+    await type(stdin, 'do a small thing');
+    await waitFor(() => lastFrame()!.includes('✓ Done'));
+    await type(stdin, '/cost');
+    await waitFor(() => lastFrame()!.includes('This session: 1 task'));
+  });
+
+  it('shows account usage in the header once Claude reports it, and /usage details it', async () => {
+    const executor: RunClaudeFn = async (o) => {
+      o.onEvent?.({ kind: 'limits', windows: { five_hour: { utilization: 0.74, resetsAt: Date.now() / 1000 + 8040 }, seven_day: { utilization: 0.18 } } });
+      return { isError: false, subtype: 'success', text: 'ok', structured: undefined, usage: emptyUsage(), sessionId: 's', numTurns: 1 };
+    };
+    const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'small_edit', executor })} />);
+    await type(stdin, 'x');
+    await waitFor(() => lastFrame()!.includes('5h 74%'));
+    await type(stdin, '/usage');
+    await waitFor(() => lastFrame()!.includes('Account usage (from Claude'));
+    expect(lastFrame()).toContain('resets in 2h');
+  });
+
   it('shows startup notices', async () => {
     const { lastFrame } = render(<App {...makeApp()} startupNotices={['Continuing your previous conversation here (2 earlier tasks).']} />);
     await waitFor(() => lastFrame()!.includes('Continuing your previous conversation'));

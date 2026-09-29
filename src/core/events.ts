@@ -1,4 +1,4 @@
-import type { Classification, ModelTier, Plan, RouteDecision, Usage } from './types.js';
+import type { Classification, Limits, ModelTier, Plan, RouteDecision, Usage } from './types.js';
 import type { ErrorKind } from './errors.js';
 import type { FileChange } from './checkpoint.js';
 
@@ -26,6 +26,7 @@ export type SmartEvent =
   | { type: 'task:done'; taskId: string; totals: Usage; ok: boolean; at?: number }
   | { type: 'task:cancelled'; taskId: string }
   | { type: 'conversation'; tasks: number; resumed: boolean }
+  | { type: 'limits'; limits: Limits }
   | { type: 'error'; kind: ErrorKind; message: string; hint?: string };
 
 export type SmartEventType = SmartEvent['type'];

@@ -26,6 +26,8 @@ const result = (text, extra = {}, i = 900, o = 300) => out({
 });
 out({ type: 'system', subtype: 'init', model, session_id: sessionId, cwd: process.cwd() });
 
+if (process.env.FAKE_5H) out({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', unifiedWindows: { five_hour: { utilization: Number(process.env.FAKE_5H), resetsAt: Math.floor(Date.now() / 1000) + 8040 }, seven_day: { utilization: Number(process.env.FAKE_7D ?? 0.18), resetsAt: Math.floor(Date.now() / 1000) + 3 * 86400 } } } });
+
 if (process.env.FAKE_ERROR === 'auth') { process.stderr.write('Not logged in. Please run /login\n'); process.exit(1); }
 
 if (schemaRaw) {

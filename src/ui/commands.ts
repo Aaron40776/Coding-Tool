@@ -8,6 +8,9 @@ export type Command =
   | { kind: 'quit' }
   | { kind: 'new' }
   | { kind: 'undo' }
+  | { kind: 'usage' }
+  | { kind: 'cost' }
+  | { kind: 'config' }
   | { kind: 'diff' }
   | { kind: 'mode'; mode: string | null | 'show' }
   | { kind: 'model'; tier: ModelTier | null }
@@ -37,6 +40,13 @@ export function parseInput(raw: string): Command | null {
       return { kind: 'new' };
     case 'undo':
       return { kind: 'undo' };
+    case 'usage':
+    case 'limits':
+      return { kind: 'usage' };
+    case 'cost':
+      return { kind: 'cost' };
+    case 'config':
+      return { kind: 'config' };
     case 'diff':
       return { kind: 'diff' };
     case 'mode': {
@@ -62,7 +72,10 @@ export const MODES: Record<string, string> = { bypass: 'bypassPermissions', edit
 export const modeLabel = (mode: string): string => Object.entries(MODES).find(([, v]) => v === mode)?.[0] ?? mode;
 
 export const COMMANDS: { name: string; help: string }[] = [
-  { name: '/stats', help: 'usage history' },
+  { name: '/stats', help: 'usage history and savings' },
+  { name: '/usage', help: 'account limits (5h / 7d)' },
+  { name: '/cost', help: 'this session\'s spend' },
+  { name: '/config', help: 'effective routing settings' },
   { name: '/model', help: 'force haiku | sonnet | opus | auto' },
   { name: '/dry', help: 'toggle dry-run' },
   { name: '/new', help: 'fresh conversation' },
@@ -80,7 +93,10 @@ export function matchCommands(draft: string): string[] {
 
 export const HELP_TEXT = [
   'Type a task and press Enter. Commands:',
-  '  /stats            show cost history',
+  '  /stats            usage history, per-model costs, estimated savings',
+  '  /usage            your Claude account limits (5-hour / 7-day) and resets',
+  '  /cost             what this session spent, by model',
+  '  /config           show the effective routing and safety settings',
   '  /model <tier>     force haiku | sonnet | opus (or "auto" to route)',
   '  /dry              toggle dry-run (classify + plan only)',
   '  /new              start a fresh conversation (forget earlier tasks)',

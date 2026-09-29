@@ -14,7 +14,8 @@ import { applyWarmCache, route } from './router.js';
 import { reviewStep } from './review.js';
 import { gatherFiles, runStep } from './runner.js';
 import type { StepOutcome, StepRecord, TaskRecord, Tracker } from './tracker.js';
-import { addUsage, emptyUsage, type Classification, type ModelTier, type Plan, type PlanStep, type RouteDecision, type Usage } from './types.js';
+import { addUsage, emptyUsage, type Classification, type Limits, type ModelTier, type Plan, type PlanStep, type RouteDecision, type Usage } from './types.js';
+import { applyLimitPressure, fmtReset, LimitsStore, pct, tightest, windowLabel } from './usage.js';
 import { detectChecks, nextAttempt, runChecks, type ExecFn } from './verifier.js';
 
 export interface PipelineDeps {
@@ -30,6 +31,9 @@ export interface PipelineDeps {
   conversationStore?: ConversationStore;
   /** Working-tree snapshots for change summaries, /diff and /undo. Defaults to none. */
   checkpoints?: Checkpointer;
+  /** Last account usage seen (persisted between runs) and where to save updates. */
+  limits?: Limits | null;
+  limitsStore?: LimitsStore;
   /** Override how project instructions are read for the planner (tests). */
   projectContext?: (cwd: string) => string;
 }
@@ -73,6 +77,10 @@ export class Pipeline {
   private permOverride: string | null = null;
   private warnedNoGit = false;
   private readonly cp: Checkpointer;
+  private limits: Limits | null;
+  private warnedWindows = new Set<string>();
+  /** Every Claude call goes through here so account usage reported in any stream is captured. */
+  private readonly run: RunClaudeFn;
 
   constructor(
     private readonly config: SmartConfig,
@@ -82,6 +90,15 @@ export class Pipeline {
   ) {
     this.conv = deps.conversation ?? newConversation();
     this.cp = deps.checkpoints ?? new NoCheckpoints();
+    this.limits = deps.limits ?? null;
+    this.run = (o) =>
+      deps.run({
+        ...o,
+        onEvent: (e) => {
+          if (e.kind === 'limits') this.observeLimits(e.windows, e.status);
+          o.onEvent?.(e);
+        },
+      });
   }
 
   // ---- commands from the frontend -------------------------------------------------------
@@ -104,6 +121,10 @@ export class Pipeline {
   }
   get permissionMode(): string {
     return this.permOverride ?? this.config.runner.permissionMode;
+  }
+  /** Latest account usage windows Claude reported (may be from a previous run). */
+  get accountLimits(): Limits | null {
+    return this.limits;
   }
   /** Number of tasks remembered in the current conversation. */
   get chatTasks(): number {
@@ -167,7 +188,7 @@ export class Pipeline {
 
       // 1. classify
       at('classify');
-      const c = await classify(prompt, { config: this.config, cwd: this.cwd, run: this.deps.run, signal, memory });
+      const c = await classify(prompt, { config: this.config, cwd: this.cwd, run: this.run, signal, memory });
       this.addCallUsage(c.usage);
       const classification = c.classification;
       summary.classification = classification;
@@ -181,7 +202,7 @@ export class Pipeline {
       if (wantPlan) {
         at('plan');
         const p = await makePlan(prompt, classification, {
-          config: this.config, cwd: this.cwd, run: this.deps.run, signal, override: this.forced, memory,
+          config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(), memory,
           projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd),
         });
         this.addCallUsage(p.usage);
@@ -272,8 +293,53 @@ export class Pipeline {
    * task every step is routed on its own merits, so a single escalated step cannot drag the rest up.
    */
   private warm(decision: RouteDecision): RouteDecision {
+    const pressured = applyLimitPressure(decision, this.limits, this.config);
     const followUp = this.conv.tasks.length > 0 && this.conv.sessionId !== null;
-    return this.config.session.resume && followUp ? applyWarmCache(decision, this.conv, this.now(), this.config) : decision;
+    return this.config.session.resume && followUp ? applyWarmCache(pressured, this.conv, this.now(), this.config) : pressured;
+  }
+
+  /** While an account usage window is nearly used up, plan with sonnet instead of the (heavier) configured planner model. */
+  private plannerDownshift(): ModelTier | null {
+    const probe = applyLimitPressure(
+      { tier: this.config.routing.planner, model: this.config.models[this.config.routing.planner], reason: 'planner', source: 'complexity' },
+      this.limits,
+      this.config,
+    );
+    return probe.tier !== this.config.routing.planner ? probe.tier : null;
+  }
+
+  private observeLimits(windows: Limits['windows'], status?: string): void {
+    this.limits = { windows, status, at: this.now() };
+    this.deps.limitsStore?.save(this.limits);
+    this.bus.emit({ type: 'limits', limits: this.limits });
+    const warnAt = this.config.usage.warnAt;
+    if (!warnAt) return;
+    for (const [name, w] of Object.entries(windows)) {
+      const level = w.utilization >= 0.95 ? 'critical' : w.utilization >= warnAt ? 'warn' : null;
+      if (!level) continue;
+      const key = `${name}:${w.resetsAt ?? ''}:${level}`;
+      if (this.warnedWindows.has(key)) continue;
+      this.warnedWindows.add(key);
+      const reset = fmtReset(w.resetsAt, this.now());
+      const hint = this.config.usage.downshiftAt && w.utilization >= this.config.usage.downshiftAt ? ' Automatic routing is avoiding Opus until it resets.' : '';
+      this.bus.emit({ type: 'notice', level: 'warn', message: `Your ${windowLabel(name)} usage limit is ${pct(w.utilization)} used${reset ? ` (resets in ${reset})` : ''}.${hint}` });
+    }
+  }
+
+  /** Human-readable effective configuration, for /config. */
+  describe(): string[] {
+    const c = this.config;
+    const r = c.routing;
+    const t = tightest(this.limits);
+    return [
+      `Models: haiku=${c.models.haiku}, sonnet=${c.models.sonnet}, opus=${c.models.opus}`,
+      `Routing: trivial→${r.trivial}, small_edit→${r.small_edit}, multi_file→${r.multi_file}, large_build→${r.large_build}; classifier ${r.classifier}, planner ${r.planner}, reviewer ${r.reviewer}`,
+      r.keywordRules.length ? `Keyword rules: ${r.keywordRules.map((k) => `/${k.match}/→${k.tier}`).join(', ')}` : 'Keyword rules: none',
+      `Escalation: retry ${c.escalation.retriesPerModel}× per model, then ${c.escalation.ladder.join(' → ')}`,
+      `Review: ${c.review.enabled ? `on (${r.reviewer})` : 'off'} · Session resume: ${c.session.resume ? 'on' : 'off'} · Warm-cache hold: ${c.session.keepWarmTier ? `on (${c.session.cacheTtlSec}s)` : 'off'}`,
+      `Permission mode: ${this.permissionMode}${this.permOverride ? ' (set with /mode)' : ''} · Limits: plan ≤${c.limits.maxPlanSteps} steps, budget/step ${c.limits.maxBudgetUsdPerStep ?? 'none'}, budget/task ${c.limits.maxBudgetUsdPerTask ?? 'none'}`,
+      `Usage guard: avoid Opus at ≥${pct(c.usage.downshiftAt)}, warn at ≥${pct(c.usage.warnAt)}${t ? ` (now ${windowLabel(t.name)} ${pct(t.window.utilization)})` : ''}`,
+    ];
   }
 
   private emitConversation(): void {
@@ -326,7 +392,7 @@ export class Pipeline {
     const emit = this.bus.emit.bind(this.bus);
     const contents = gatherFiles(this.cwd, files, this.config.limits.maxContextBytes);
     if (contents.length === 0) return undefined;
-    const out = await reviewStep({ task, step, files: contents, config: this.config, cwd: this.cwd, run: this.deps.run, signal });
+    const out = await reviewStep({ task, step, files: contents, config: this.config, cwd: this.cwd, run: this.run, signal });
     this.addCallUsage(out.usage);
     if (out.kind === 'unavailable') {
       emit({ type: 'step:review', stepId: step.id, pass: true, issues: [], skipped: out.reason });
@@ -439,7 +505,7 @@ export class Pipeline {
           plan, step, index, total, touchedFiles: touched, failure, memory: memory || undefined, note: note || undefined,
           session: sessionId ? { id: sessionId, resume: resuming } : undefined,
           effort: this.config.runner.effort[tier],
-          config: this.config, cwd: this.cwd, run: this.deps.run, route: decision, permissionMode: perm.mode, signal,
+          config: this.config, cwd: this.cwd, run: this.run, route: decision, permissionMode: perm.mode, signal,
           onOutput: (kind, text) => {
             if (kind === 'text') this.lastReply = text;
             emit({ type: 'step:output', stepId: step.id, kind, text });

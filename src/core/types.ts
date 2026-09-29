@@ -47,6 +47,22 @@ export interface Usage {
   costUsd: number;
 }
 
+/** One rolling usage window of the Claude account (e.g. the 5-hour and 7-day limits). */
+export interface LimitWindow {
+  /** 0..1 share of the window's allowance already used. */
+  utilization: number;
+  /** Epoch seconds when the window resets. */
+  resetsAt?: number;
+}
+
+export interface Limits {
+  windows: Record<string, LimitWindow>;
+  /** Claude's own verdict, e.g. "allowed", "allowed_warning", "rejected". */
+  status?: string;
+  /** Epoch ms when this was observed. */
+  at: number;
+}
+
 export const emptyUsage = (): Usage => ({
   inputTokens: 0,
   outputTokens: 0,

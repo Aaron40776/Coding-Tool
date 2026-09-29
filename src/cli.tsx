@@ -12,6 +12,7 @@ import { InputHistory } from './core/inputHistory.js';
 import { Pipeline } from './core/pipeline.js';
 import { isTier } from './core/router.js';
 import { Tracker } from './core/tracker.js';
+import { LimitsStore } from './core/usage.js';
 import type { ModelTier } from './core/types.js';
 import { App } from './ui/App.js';
 
@@ -78,7 +79,8 @@ async function main() {
     : [];
   const checkpoints = await createCheckpoints(cwd);
   process.on('exit', () => checkpoints.dispose());
-  const pipeline = new Pipeline(config, bus, cwd, { run: runClaude, tracker, conversation: previous ?? undefined, conversationStore, checkpoints });
+  const limitsStore = new LimitsStore(expandHome(config.limitsPath));
+  const pipeline = new Pipeline(config, bus, cwd, { run: runClaude, tracker, conversation: previous ?? undefined, conversationStore, checkpoints, limits: limitsStore.load(), limitsStore });
 
   let exitCode = 0;
   const altScreen = (on: boolean) => process.stdout.write(on ? '\x1b[?1049h\x1b[H' : '\x1b[?1049l');
@@ -99,6 +101,7 @@ async function main() {
       cwd={cwd}
       version={pkg.version}
       permissionMode={config.runner.permissionMode}
+      pricing={config.pricing}
       startupNotices={startupNotices}
       inputHistory={new InputHistory(expandHome(config.historyPath))}
       oneShot={Boolean(task)}

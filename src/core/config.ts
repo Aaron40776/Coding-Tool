@@ -6,6 +6,7 @@ import { SmartError } from './errors.js';
 
 const tier = z.enum(['haiku', 'sonnet', 'opus']);
 const effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+const price = z.object({ input: z.number().min(0), output: z.number().min(0) });
 
 const validRegex = (s: string): boolean => {
   try {
@@ -74,8 +75,25 @@ const ConfigSchema = z.object({
     .object({ auto: z.boolean().default(true), commands: z.array(z.string()).default([]), timeoutSec: z.number().int().min(5).default(300) })
     .prefault({}),
   review: z.object({ enabled: z.boolean().default(true) }).prefault({}),
+  usage: z
+    .object({
+      /** Stop automatically choosing Opus once any account usage window reaches this share (0..1). 0 disables. */
+      downshiftAt: z.number().min(0).max(1).default(0.9),
+      /** Warn once when a window first reaches this share (0..1). 0 disables. */
+      warnAt: z.number().min(0).max(1).default(0.8),
+    })
+    .prefault({}),
+  /** List prices in USD per million tokens, used ONLY for the savings estimate in /stats (real costs come from Claude Code). */
+  pricing: z
+    .object({
+      haiku: price.default({ input: 1, output: 5 }),
+      sonnet: price.default({ input: 3, output: 15 }),
+      opus: price.default({ input: 5, output: 25 }),
+    })
+    .prefault({}),
   trackerPath: z.string().default('~/.smart/history.json'),
   conversationsPath: z.string().default('~/.smart/conversations.json'),
+  limitsPath: z.string().default('~/.smart/limits.json'),
   historyPath: z.string().default('~/.smart/input-history.json'),
 });
 

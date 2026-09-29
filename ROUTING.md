@@ -57,6 +57,12 @@ default `haiku`) whether the step's **acceptance criteria** are met by the files
 The reviewer is told to fail only for concrete, verifiable problems (unmet criterion, syntax error, missing function), never for style. A "fail" feeds
 the same retry-then-escalate loop as a failing test. It costs a few cents per step; set `review.enabled: false` to skip it, or `routing.reviewer: "sonnet"` for a stricter one.
 
+## Usage limits
+
+Claude reports your account's 5-hour and 7-day usage on every call. When any window reaches `usage.downshiftAt` (default 0.9), *automatic* routing and
+planning use Sonnet instead of Opus, with the reason shown (`5h limit at 93% so using sonnet instead of opus`). Forced models, your per-step choice, and
+escalations after a failing step are never downshifted. Warnings appear once per window at `usage.warnAt` (default 0.8) and at 95%.
+
 ## Escalation
 
 After a step runs, `smart` runs your checks. If they fail:
