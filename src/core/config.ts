@@ -55,7 +55,7 @@ const ConfigSchema = z.object({
     })
     .prefault({}),
   verify: z
-    .object({ auto: z.boolean().default(true), commands: z.array(z.string()).default([]) })
+    .object({ auto: z.boolean().default(true), commands: z.array(z.string()).default([]), timeoutSec: z.number().int().min(5).default(300) })
     .prefault({}),
   trackerPath: z.string().default('~/.smart/history.json'),
 });
