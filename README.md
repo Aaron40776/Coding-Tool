@@ -169,6 +169,10 @@ npm run dev        # run from source
 
 Tests mock Claude (`vitest`, `ink-testing-library`). Run the CLI wrapper against the real `claude` with `npm run dev`.
 
+- `SMART_E2E=1 npm test -- test/e2e` runs one tiny task through the real `claude` CLI on Haiku (a few cents) and checks the file, the cost and the saved history.
+- `npm run bench` compares plain Sonnet, plain Opus and `smart` on six small tasks with checkable outcomes. It prints the tasks and a rough cost estimate and **runs nothing** until you add `--run`
+  (`npm run bench -- --run --tasks fizzbuzz,fix-bug --variants sonnet,smart`). It writes `bench-results.md`. The savings claim is not benchmarked yet: run it and share the numbers.
+
 ## License
 
 MIT
