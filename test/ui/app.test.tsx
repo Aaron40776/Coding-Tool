@@ -125,6 +125,7 @@ describe('App', () => {
     const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'large_build', executor })} />);
     await type(stdin, 'build something big');
     await waitFor(() => lastFrame()!.includes('Review plan'), 4000);
+    await wait(120); // Ink attaches the key listener in an effect just after the first render
     expect(lastFrame()).toContain('1. First');
     stdin.write(KEYS.down);
     await wait();
@@ -141,6 +142,7 @@ describe('App', () => {
     const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'large_build' })} />);
     await type(stdin, 'build something big');
     await waitFor(() => lastFrame()!.includes('Review plan'), 4000);
+    await wait(120); // Ink attaches the key listener in an effect just after the first render
     stdin.write(KEYS.esc);
     await waitFor(() => lastFrame()!.includes('Cancelled.'), 4000);
     expect(lastFrame()).not.toContain('Review plan');
@@ -172,10 +174,11 @@ describe('App', () => {
       throw new SmartError('auth', 'not logged in', 'Run `claude` to log in');
     };
     const { lastFrame } = render(<App {...makeApp({ complexity: 'small_edit', executor })} initial={{ prompt: 'x' }} oneShot onExit={onExit} />);
+    // One-shot mode exits shortly after finishing and the screen is cleared on exit, so read the error while it is on screen.
+    await waitFor(() => lastFrame()!.includes('Run `claude` to log in'), 4000);
+    expect(lastFrame()).toContain('not logged in');
     await waitFor(() => onExit.mock.calls.length === 1, 4000);
     expect(onExit).toHaveBeenCalledWith(false);
-    expect(lastFrame()).toContain('not logged in');
-    expect(lastFrame()).toContain('Run `claude` to log in');
   });
 
   it('Tab moves focus between panels', async () => {
