@@ -6,6 +6,15 @@ import { SmartError } from './errors.js';
 
 const tier = z.enum(['haiku', 'sonnet', 'opus']);
 
+const validRegex = (s: string): boolean => {
+  try {
+    new RegExp(s, 'i');
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const ConfigSchema = z.object({
   models: z
     .object({ haiku: z.string().min(1), sonnet: z.string().min(1), opus: z.string().min(1) })
@@ -18,7 +27,7 @@ const ConfigSchema = z.object({
       large_build: tier.default('sonnet'),
       planner: tier.default('opus'),
       classifier: tier.default('haiku'),
-      keywordRules: z.array(z.object({ match: z.string().min(1), tier })).default([
+      keywordRules: z.array(z.object({ match: z.string().min(1).refine(validRegex, 'invalid regular expression'), tier })).default([
         { match: 'architecture|race condition|deadlock', tier: 'opus' },
       ]),
     })

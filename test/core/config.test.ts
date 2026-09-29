@@ -38,3 +38,11 @@ describe('config', () => {
     expect(() => loadConfig(tmp(), 'nope.json')).toThrow(/not found/);
   });
 });
+
+describe('config keyword rules', () => {
+  it('rejects an invalid regular expression', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'smart-cfg-'));
+    writeFileSync(join(dir, 'smart.config.json'), JSON.stringify({ routing: { keywordRules: [{ match: '(', tier: 'opus' }] } }));
+    expect(() => loadConfig(dir)).toThrow(/invalid regular expression/);
+  });
+});
