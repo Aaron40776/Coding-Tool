@@ -32,6 +32,8 @@ export interface Plan {
 
 export interface RouteDecision {
   tier: ModelTier;
+  /** Which rule decided: lets callers know whether the choice was the user's or automatic. */
+  source?: 'override' | 'step' | 'keyword' | 'fallback' | 'complexity' | 'session';
   /** Concrete model name, read from config. */
   model: string;
   reason: string;

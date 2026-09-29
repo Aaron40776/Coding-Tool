@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultConfig } from '../../src/core/config.js';
-import { escalate, isTier, modelFor, route, routeRole } from '../../src/core/router.js';
+import { applyWarmCache, escalate, isTier, modelFor, route, routeRole } from '../../src/core/router.js';
 import type { Classification, Complexity } from '../../src/core/types.js';
 
 const cls = (complexity: Complexity): Classification => ({ complexity, needsPlan: false, reason: 'x' });
@@ -80,5 +80,35 @@ describe('isTier', () => {
   it('validates tier names', () => {
     expect(isTier('opus')).toBe(true);
     expect(isTier('gpt')).toBe(false);
+  });
+});
+
+describe('applyWarmCache', () => {
+  const now = 1_000_000;
+  const haikuDecision = () => route({ classification: cls('trivial'), text: 'what is x' }, cfg());
+
+  it('keeps a higher tier while the session cache is warm', () => {
+    const d = applyWarmCache(haikuDecision(), { lastTier: 'sonnet', lastCallAt: now - 60_000 }, now, cfg());
+    expect(d).toMatchObject({ tier: 'sonnet', model: 'sonnet', source: 'session' });
+    expect(d.reason).toContain('kept sonnet');
+  });
+  it('downgrades normally once the cache has gone cold', () => {
+    expect(applyWarmCache(haikuDecision(), { lastTier: 'sonnet', lastCallAt: now - 301_000 }, now, cfg()).tier).toBe('haiku');
+  });
+  it('never blocks an upgrade', () => {
+    const up = route({ classification: cls('multi_file'), text: 'x' }, cfg());
+    expect(applyWarmCache(up, { lastTier: 'haiku', lastCallAt: now - 1000 }, now, cfg()).tier).toBe('sonnet');
+  });
+  it('respects forced models, step choices and keyword rules', () => {
+    const forced = route({ classification: cls('trivial'), text: 'x', override: 'haiku' }, cfg());
+    expect(applyWarmCache(forced, { lastTier: 'opus', lastCallAt: now }, now, cfg()).tier).toBe('haiku');
+    const chosen = route({ classification: cls('trivial'), text: 'x', step: { tier: 'haiku' } }, cfg());
+    expect(applyWarmCache(chosen, { lastTier: 'opus', lastCallAt: now }, now, cfg()).tier).toBe('haiku');
+  });
+  it('does nothing without a session, or when disabled', () => {
+    expect(applyWarmCache(haikuDecision(), null, now, cfg()).tier).toBe('haiku');
+    const c = cfg();
+    c.session.keepWarmTier = false;
+    expect(applyWarmCache(haikuDecision(), { lastTier: 'opus', lastCallAt: now }, now, c).tier).toBe('haiku');
   });
 });

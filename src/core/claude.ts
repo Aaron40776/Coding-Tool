@@ -102,7 +102,8 @@ export class StreamParser {
             result: {
               isError: d.is_error === true || (typeof d.subtype === 'string' && d.subtype !== 'success'),
               subtype: str(d.subtype),
-              text: str(d.result),
+              // Failures such as "No conversation found" arrive in `errors`, not `result`.
+              text: str(d.result) || (Array.isArray(d.errors) ? d.errors.filter((x) => typeof x === 'string').join('; ') : ''),
               structured: d.structured_output,
               usage: resultUsage(d),
               sessionId: str(d.session_id),
@@ -159,6 +160,9 @@ export interface RunClaudeOptions {
   appendSystemPrompt?: string;
   /** JSON schema (object) for structured output. */
   jsonSchema?: object;
+  /** Persist and continue a Claude Code conversation. Omit for stateless calls (nothing is saved). */
+  session?: { id: string; resume: boolean };
+  effort?: string;
   /** Built-in tools to allow. `[]` disables all tools; undefined keeps the default set. */
   tools?: string[];
   permissionMode?: string;
@@ -172,7 +176,10 @@ export interface RunClaudeOptions {
 }
 
 export function buildArgs(o: RunClaudeOptions): string[] {
-  const args = ['-p', '--model', o.model, '--output-format', 'stream-json', '--verbose', '--no-session-persistence'];
+  const args = ['-p', '--model', o.model, '--output-format', 'stream-json', '--verbose'];
+  if (o.session) args.push(o.session.resume ? '--resume' : '--session-id', o.session.id);
+  else args.push('--no-session-persistence');
+  if (o.effort) args.push('--effort', o.effort);
   if (o.systemPrompt !== undefined) args.push('--system-prompt', o.systemPrompt);
   if (o.appendSystemPrompt) args.push('--append-system-prompt', o.appendSystemPrompt);
   if (o.tools) args.push('--tools', o.tools.join(','));

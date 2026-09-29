@@ -69,6 +69,21 @@ describe('buildArgs / resolvePermissionMode', () => {
     expect(args).toContain('--json-schema');
   });
 
+  it('is stateless by default and persists/resumes sessions when asked', () => {
+    expect(buildArgs({ prompt: 'x', model: 'm', cwd: '.' })).toContain('--no-session-persistence');
+    const first = buildArgs({ prompt: 'x', model: 'm', cwd: '.', session: { id: 'abc', resume: false }, effort: 'low' });
+    expect(first).toEqual(expect.arrayContaining(['--session-id', 'abc', '--effort', 'low']));
+    expect(first).not.toContain('--no-session-persistence');
+    const next = buildArgs({ prompt: 'x', model: 'm', cwd: '.', session: { id: 'abc', resume: true } });
+    expect(next).toEqual(expect.arrayContaining(['--resume', 'abc']));
+    expect(next).not.toContain('--session-id');
+  });
+
+  it('surfaces the errors array of a failed result', () => {
+    const [ev] = new StreamParser().push(JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: null, errors: ['No conversation found with session ID: x'] }) + '\n');
+    expect(ev && ev.kind === 'result' && ev.result.text).toContain('No conversation found');
+  });
+
   it('omits --tools when unset', () => {
     expect(buildArgs({ prompt: 'x', model: 'm', cwd: '.' })).not.toContain('--tools');
   });

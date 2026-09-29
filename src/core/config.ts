@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { SmartError } from './errors.js';
 
 const tier = z.enum(['haiku', 'sonnet', 'opus']);
+const effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 
 const validRegex = (s: string): boolean => {
   try {
@@ -27,6 +28,7 @@ const ConfigSchema = z.object({
       large_build: tier.default('sonnet'),
       planner: tier.default('opus'),
       classifier: tier.default('haiku'),
+      reviewer: tier.default('haiku'),
       keywordRules: z.array(z.object({ match: z.string().min(1).refine(validRegex, 'invalid regular expression'), tier })).default([
         { match: 'architecture|race condition|deadlock', tier: 'opus' },
       ]),
@@ -43,6 +45,18 @@ const ConfigSchema = z.object({
       maxPlanSteps: z.number().int().min(1).max(30).default(8),
       maxContextBytes: z.number().int().min(0).default(40_000),
       maxBudgetUsdPerStep: z.number().positive().nullable().default(null),
+      /** Stop the task once its total cost reaches this many dollars. */
+      maxBudgetUsdPerTask: z.number().positive().nullable().default(null),
+    })
+    .prefault({}),
+  session: z
+    .object({
+      /** Keep one Claude Code session per conversation (--resume) so follow-ups have real history. */
+      resume: z.boolean().default(true),
+      /** How long Anthropic's prompt cache stays warm after a call; used to decide whether switching models is worth it. */
+      cacheTtlSec: z.number().int().min(0).default(300),
+      /** While the cache is warm, never downgrade to a cheaper model (it would re-read the history at full price). */
+      keepWarmTier: z.boolean().default(true),
     })
     .prefault({}),
   runner: z
@@ -52,12 +66,16 @@ const ConfigSchema = z.object({
         .default('bypassPermissions'),
       bare: z.boolean().default(false),
       extraArgs: z.array(z.string()).default([]),
+      /** Optional `--effort` level per model tier, e.g. { "haiku": "low", "opus": "high" }. Unset = Claude Code default. */
+      effort: z.object({ haiku: effort.optional(), sonnet: effort.optional(), opus: effort.optional() }).default({}),
     })
     .prefault({}),
   verify: z
     .object({ auto: z.boolean().default(true), commands: z.array(z.string()).default([]), timeoutSec: z.number().int().min(5).default(300) })
     .prefault({}),
+  review: z.object({ enabled: z.boolean().default(true) }).prefault({}),
   trackerPath: z.string().default('~/.smart/history.json'),
+  conversationsPath: z.string().default('~/.smart/conversations.json'),
 });
 
 export type SmartConfig = z.infer<typeof ConfigSchema>;
