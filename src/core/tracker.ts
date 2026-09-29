@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Classification, Usage } from './types.js';
@@ -94,9 +95,9 @@ export class Tracker {
   append(record: TaskRecord): string | null {
     try {
       const tasks = [...this.load(), { ...record, prompt: record.prompt.slice(0, MAX_PROMPT) }].slice(-MAX_TASKS);
-      mkdirSync(dirname(this.path), { recursive: true });
-      const tmp = `${this.path}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ version: 1, tasks } satisfies HistoryFile, null, 2));
+      mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
+      const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`; // unique: two smart sessions must not share a temp file
+      writeFileSync(tmp, JSON.stringify({ version: 1, tasks } satisfies HistoryFile, null, 2), { mode: 0o600 });
       renameSync(tmp, this.path);
       return null;
     } catch (e) {

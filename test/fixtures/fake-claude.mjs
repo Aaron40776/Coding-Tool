@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 
 const args = process.argv.slice(2);
 const flag = (n) => { const i = args.indexOf(n); return i === -1 ? undefined : args[i + 1]; };
+if (args.includes('--version')) { process.stdout.write('0.0.0-fake (Claude Code)\n'); process.exit(0); }
 const model = flag('--model') ?? 'sonnet';
 const schemaRaw = flag('--json-schema');
 const sessionId = flag('--session-id') ?? flag('--resume') ?? randomUUID();
@@ -69,6 +70,6 @@ await tool('Read', { file_path: process.cwd() + '/index.html' });
 await tool('Write', { file_path: process.cwd() + '/src/game.js' });
 await tool('Edit', { file_path: process.cwd() + '/index.html' });
 await tool('Bash', { command: 'node --check src/game.js' });
-const finalText = 'Done: implemented this step and checked that it runs. ' + (prompt.slice(0, 60).replace(/\s+/g, ' '));
+const finalText = process.env.FAKE_BIG ? 'x'.repeat(Number(process.env.FAKE_BIG)) + '\nEND' : 'Done: implemented this step and checked that it runs. ' + (prompt.slice(0, 60).replace(/\s+/g, ' '));
 await say(finalText);
 result(finalText, {}, 1500, 700);

@@ -217,7 +217,9 @@ export function resolvePermissionMode(mode: string, uid: number | undefined = pr
   return { mode };
 }
 
-const AUTH_RE = /(not logged in|log ?in|authenticat|invalid api key|api key|401|unauthorized|oauth)/i;
+/** Signs of an authentication problem. Deliberately specific: "No conversation found with session ID: …401…" must not match. */
+const AUTH_RE = /(not logged in|please (?:run )?\/?log ?in|\/login|not authenticated|authentication (?:failed|error|required)|invalid (?:x-)?api[ -]key|missing api key|\b401\b|unauthori[sz]ed|oauth token)/i;
+export const isAuthFailure = (detail: string): boolean => !/No conversation found/i.test(detail) && AUTH_RE.test(detail);
 
 const KILL_GRACE_MS = 2000;
 
@@ -240,11 +242,13 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
     let stderr = '';
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
+    let hangTimer: NodeJS.Timeout | undefined;
 
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
       if (killTimer) clearTimeout(killTimer);
+      if (hangTimer) clearTimeout(hangTimer);
       opts.signal?.removeEventListener('abort', onAbort);
       fn();
     };
@@ -258,7 +262,12 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
 
     const onAbort = () => {
       child.kill('SIGTERM');
-      killTimer = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS);
+      killTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+        // If a grandchild still holds our pipes, 'close' may never fire: do not let a cancel hang.
+        hangTimer = setTimeout(() => finish(() => reject(cancelled())), 1000);
+        hangTimer.unref?.();
+      }, KILL_GRACE_MS);
       killTimer.unref?.();
     };
     opts.signal?.addEventListener('abort', onAbort, { once: true });
@@ -281,12 +290,12 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
         if (result) {
           if (result.isError) {
             const detail = result.text || result.subtype || 'unknown error';
-            return reject(AUTH_RE.test(detail) ? authError(detail) : new SmartError('claude', `Claude Code reported an error: ${detail}`));
+            return reject(isAuthFailure(detail) ? authError(detail) : new SmartError('claude', `Claude Code reported an error: ${detail}`));
           }
           return resolve(result);
         }
         const detail = stderr.trim() || `exit code ${code}`;
-        reject(AUTH_RE.test(detail) ? authError(detail) : new SmartError('claude', `Claude Code failed: ${detail}`));
+        reject(isAuthFailure(detail) ? authError(detail) : new SmartError('claude', `Claude Code failed: ${detail}`));
       });
     });
   });

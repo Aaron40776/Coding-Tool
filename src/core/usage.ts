@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { SmartConfig } from './config.js';
@@ -69,9 +70,9 @@ export class LimitsStore {
 
   save(limits: Limits): void {
     try {
-      mkdirSync(dirname(this.path), { recursive: true });
-      const tmp = `${this.path}.tmp`;
-      writeFileSync(tmp, JSON.stringify(limits));
+      mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
+      const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`; // unique: two smart sessions must not share a temp file
+      writeFileSync(tmp, JSON.stringify(limits), { mode: 0o600 });
       renameSync(tmp, this.path);
     } catch {
       /* a convenience only */

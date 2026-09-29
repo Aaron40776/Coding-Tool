@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 const slash = (p: string): string => p.split(sep).join('/');
@@ -39,11 +39,22 @@ export function gatherFiles(cwd: string, files: string[], maxBytes: number): Fil
     const rel = relative(root, real);
     if (rel === '' || rel.startsWith('..' + sep) || rel === '..' || isAbsolute(rel)) continue;
     try {
-      if (!statSync(real).isFile()) continue;
-      const buf = readFileSync(real);
+      // Read at most the budget (+1 byte to know if it was cut): a referenced multi-GB log must not be loaded whole.
+      const fd = openSync(real, 'r');
+      let buf: Buffer;
+      let size: number;
+      try {
+        const st = fstatSync(fd);
+        if (!st.isFile()) continue;
+        size = st.size;
+        buf = Buffer.alloc(Math.min(size, budget + 1));
+        readSync(fd, buf, 0, buf.length, 0);
+      } finally {
+        closeSync(fd);
+      }
       if (buf.subarray(0, 8000).includes(0)) continue; // binary
       const slice = buf.subarray(0, budget);
-      out.push({ path: slash(relative(root, resolve(cwd, f))) || f, content: slice.toString('utf8'), truncated: buf.length > slice.length });
+      out.push({ path: slash(relative(root, resolve(cwd, f))) || f, content: slice.toString('utf8'), truncated: size > slice.length });
       budget -= slice.length;
     } catch {
       continue;

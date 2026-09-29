@@ -100,6 +100,7 @@ async function main() {
     return fail((e as Error).message);
   }
   const { config } = loaded;
+  const configWarnings = loaded.warnings;
   if (opts.budget) config.limits.maxBudgetUsdPerTask = opts.budget;
   if (!opts.review) config.review.enabled = false;
 
@@ -118,9 +119,9 @@ async function main() {
   const bus = new EventBus();
   const conversationStore = new ConversationStore(expandHome(config.conversationsPath));
   const previous = opts.continue ? conversationStore.load(cwd) : null;
-  const startupNotices = opts.continue
+  const startupNotices = [...configWarnings, ...(opts.continue
     ? [previous ? `Continuing your previous conversation here (${previous.tasks.length} earlier task${previous.tasks.length === 1 ? '' : 's'}).` : 'No previous conversation in this directory; starting a new one.']
-    : [];
+    : [])];
   const checkpoints = await createCheckpoints(cwd);
   process.on('exit', () => checkpoints.dispose());
   const limitsStore = new LimitsStore(expandHome(config.limitsPath));
@@ -131,8 +132,20 @@ async function main() {
     if (!prompt && !process.stdin.isTTY) prompt = await readStdin();
     if (!prompt) return fail('with --print, give a task as an argument or on stdin: smart -p "fix the typo in README"');
     pipeline.forceModel(opts.model ?? null);
+    for (const w of configWarnings) process.stderr.write(`smart: warning: ${w}\n`);
+    // `kill` / `timeout` / a closed terminal must stop Claude Code too, not orphan it (it would keep editing files and spending money).
+    const stop = (code: number) => () => {
+      pipeline.cancel();
+      checkpoints.dispose();
+      process.exit(code);
+    };
+    process.on('SIGTERM', stop(143));
+    process.on('SIGHUP', stop(129));
     const code = await runPrint(pipeline, bus, prompt, { format: opts.outputFormat, verbose: Boolean(opts.verbose), dryRun: opts.dryRun, noPlan: !opts.plan }, { out: process.stdout, err: process.stderr });
     checkpoints.dispose();
+    // process.exit() can drop what is still buffered when stdout is a pipe (output past ~64 KB was lost), so flush first.
+    await new Promise<void>((r) => process.stdout.write('', () => r()));
+    await new Promise<void>((r) => process.stderr.write('', () => r()));
     process.exit(code);
   }
 

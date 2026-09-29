@@ -103,7 +103,10 @@ export class GitCheckpoints implements Checkpointer {
       this.seeded = true;
       const real = join(this.gitDir, 'index');
       try {
-        if (existsSync(real)) copyFileSync(real, this.cacheIndex);
+        // assume-unchanged / skip-worktree entries would keep stale content in a seeded index, so then start empty.
+        const flags = await git(['ls-files', '-v'], { cwd: this.root, timeoutMs: 15_000 });
+        const stale = flags.code === 0 && /^[hsS] /m.test(flags.stdout);
+        if (!stale && existsSync(real)) copyFileSync(real, this.cacheIndex);
       } catch {
         /* start from an empty index */
       }
@@ -124,7 +127,8 @@ export class GitCheckpoints implements Checkpointer {
     for (let i = 0; i + 1 < parts.length; i += 2) {
       const status = parts[i];
       const path = parts[i + 1];
-      if (path && (status === 'A' || status === 'M' || status === 'D')) files.push({ path, status });
+      // T (file <-> symlink type change) is restored like a modification.
+      if (path && (status === 'A' || status === 'M' || status === 'D' || status === 'T')) files.push({ path, status: status === 'T' ? 'M' : status });
     }
     const stat = await git(['diff', '--no-renames', '--numstat', from, to], { cwd: this.root });
     let insertions = 0;

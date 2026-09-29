@@ -110,8 +110,14 @@ export async function runPrint(pipeline: Pipeline, bus: EventBus, prompt: string
     }
   };
   const unsubscribe = bus.subscribe(handle);
-  const onSigint = () => pipeline.cancel();
-  process.once('SIGINT', onSigint);
+  // First Ctrl-C cancels cleanly; a second one leaves immediately.
+  let interrupts = 0;
+  const onSigint = () => {
+    interrupts += 1;
+    if (interrupts > 1) process.exit(130);
+    pipeline.cancel();
+  };
+  process.on('SIGINT', onSigint);
 
   let summary;
   try {

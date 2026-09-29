@@ -6,7 +6,7 @@ import { SmartError } from './errors.js';
 
 const tier = z.enum(['haiku', 'sonnet', 'opus']);
 const effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
-const price = z.object({ input: z.number().min(0), output: z.number().min(0) });
+const priceFor = (input: number, output: number) => z.object({ input: z.number().min(0).default(input), output: z.number().min(0).default(output) }).prefault({});
 
 const validRegex = (s: string): boolean => {
   try {
@@ -18,9 +18,10 @@ const validRegex = (s: string): boolean => {
 };
 
 const ConfigSchema = z.object({
+  // Each field has its own default, so overriding one model (`{"models":{"opus":"claude-opus-4-1"}}`) is valid.
   models: z
-    .object({ haiku: z.string().min(1), sonnet: z.string().min(1), opus: z.string().min(1) })
-    .prefault({ haiku: 'haiku', sonnet: 'sonnet', opus: 'opus' }),
+    .object({ haiku: z.string().min(1).default('haiku'), sonnet: z.string().min(1).default('sonnet'), opus: z.string().min(1).default('opus') })
+    .prefault({}),
   routing: z
     .object({
       trivial: tier.default('haiku'),
@@ -86,9 +87,9 @@ const ConfigSchema = z.object({
   /** List prices in USD per million tokens, used ONLY for the savings estimate in /stats (real costs come from Claude Code). */
   pricing: z
     .object({
-      haiku: price.default({ input: 1, output: 5 }),
-      sonnet: price.default({ input: 3, output: 15 }),
-      opus: price.default({ input: 5, output: 25 }),
+      haiku: priceFor(1, 5),
+      sonnet: priceFor(3, 15),
+      opus: priceFor(5, 25),
     })
     .prefault({}),
   trackerPath: z.string().default('~/.smart/history.json'),
@@ -101,7 +102,8 @@ export type SmartConfig = z.infer<typeof ConfigSchema>;
 
 export const defaultConfig = (): SmartConfig => ConfigSchema.parse({});
 
-export const expandHome = (p: string): string => (p.startsWith('~') ? join(homedir(), p.slice(1)) : resolve(p));
+/** `~`, `~/x` and `~\\x` mean the home directory; `~foo` is an ordinary relative name. */
+export const expandHome = (p: string): string => (p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? join(homedir(), p.slice(1)) : resolve(p));
 
 /** Candidate config locations, highest priority first. */
 export const configPaths = (cwd: string): string[] => [
@@ -113,13 +115,41 @@ export interface LoadedConfig {
   config: SmartConfig;
   /** Path the config was read from, or null when defaults are used. */
   source: string | null;
+  /** Things worth telling the user: unknown (probably misspelled) keys, and risky settings in a project-local file. */
+  warnings: string[];
+}
+
+/** Keys the schema knows, two levels deep (every key has a default, so the default config lists them all). */
+function unknownKeys(raw: unknown): string[] {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return [];
+  const known = defaultConfig() as unknown as Record<string, unknown>;
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(k in known)) {
+      out.push(k);
+      continue;
+    }
+    const section = known[k];
+    if (typeof v === 'object' && v !== null && !Array.isArray(v) && typeof section === 'object' && section !== null && !Array.isArray(section)) {
+      for (const sub of Object.keys(v)) if (!(sub in (section as Record<string, unknown>))) out.push(`${k}.${sub}`);
+    }
+  }
+  return out;
+}
+
+/** A project-local config runs with your permissions: say so when it sets anything that executes commands or passes flags to Claude. */
+function riskyProjectSettings(config: SmartConfig): string[] {
+  const out: string[] = [];
+  if (config.verify.commands.length) out.push(`verify.commands (runs: ${config.verify.commands.join('; ')})`);
+  if (config.runner.extraArgs.length) out.push(`runner.extraArgs (${config.runner.extraArgs.join(' ')})`);
+  return out;
 }
 
 export function loadConfig(cwd: string, explicitPath?: string): LoadedConfig {
   const candidates = explicitPath ? [resolve(cwd, explicitPath)] : configPaths(cwd);
   const source = candidates.find((p) => existsSync(p)) ?? null;
   if (explicitPath && !source) throw new SmartError('config', `Config file not found: ${explicitPath}`);
-  if (!source) return { config: defaultConfig(), source: null };
+  if (!source) return { config: defaultConfig(), source: null, warnings: [] };
 
   let raw: unknown;
   try {
@@ -132,5 +162,12 @@ export function loadConfig(cwd: string, explicitPath?: string): LoadedConfig {
     const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
     throw new SmartError('config', `Invalid config in ${source}: ${issues}`);
   }
-  return { config: parsed.data, source };
+  const warnings: string[] = [];
+  const unknown = unknownKeys(raw);
+  if (unknown.length) warnings.push(`${source}: ignoring unknown setting${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')} (a typo?)`);
+  if (source === candidates[0] && !explicitPath) {
+    const risky = riskyProjectSettings(parsed.data);
+    if (risky.length) warnings.push(`This directory's smart.config.json sets ${risky.join(' and ')}. Only run smart here if you trust this project.`);
+  }
+  return { config: parsed.data, source, warnings };
 }

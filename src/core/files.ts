@@ -7,10 +7,10 @@ const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.nex
 /** Compact list of project files (tracked + untracked-not-ignored via git, else a shallow walk). */
 export function projectFiles(cwd: string, limit = 80): string[] {
   try {
-    const out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
+    const out = execFileSync('git', ['-c', 'core.quotepath=false', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
       cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, maxBuffer: 4 * 1024 * 1024,
     });
-    return out.split('\n').filter(Boolean).slice(0, limit);
+    return out.split('\0').filter((f) => f && existsSync(join(cwd, f))).slice(0, limit);
   } catch {
     return walk(cwd, '', 3, limit);
   }
