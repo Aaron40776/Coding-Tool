@@ -34,7 +34,20 @@ smart --model haiku "rename foo to bar in utils.ts"   # force a model tier for e
 smart --no-plan "refactor the parser"                 # skip planning, run as a single step
 smart --config ./my.config.json "..."
 smart -c                             # continue the previous conversation in this directory (like `claude -c`)
+smart --budget 1.50 "big refactor"   # stop the task if it reaches $1.50
+smart init                           # write a starter smart.config.json here
 ```
+
+### Headless / scripts / CI (`-p`)
+
+```sh
+smart -p "fix the typo in README"              # reply on stdout, progress on stderr, exit code 0/1 (130 if cancelled)
+echo "add a --version flag" | smart -p         # the task can come from stdin
+smart -p --dry-run "build a REST API"          # print the plan and the model chosen per step, run nothing
+smart -p --output-format json "..." | jq .     # one JSON document: steps, models, outcome, changes, cost, reply
+smart -p --verbose "..."                       # also stream tool calls to stderr
+```
+Plans are auto-approved in `-p` mode. It needs no terminal, so it works in pipes and CI. Add `-c` to continue a conversation, `--model` to force a tier, `--no-review` to skip the review.
 
 ### Keys and commands
 
@@ -55,6 +68,9 @@ smart -c                             # continue the previous conversation in thi
 | `/mode <bypass\|edits\|plan\|auto>` | permission mode; `plan` is read-only |
 
 Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prompts (kept across sessions).
+
+**Referencing files:** type `@` and a path (`Tab` completes it): `refactor @src/parser.ts to use async iterators`. The file's contents go to the planner and the first coding step.
+**Multi-line prompts:** end a line with `\` and press Enter (or Alt+Enter), or just paste; pasted text never sends by itself.
 | `/help`, `/quit`, `Ctrl+C` | help, quit |
 
 **Plan approval.** After planning, review the plan: `↑ ↓` select, `Space` skip a step, `m` pick a model for a step,

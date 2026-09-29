@@ -96,6 +96,8 @@ export function buildStepPrompt(i: StepPromptInput): string {
 export const EXECUTOR_APPEND = 'Be terse: no preamble or recap. Never ask questions; make reasonable assumptions. End with one line saying what you did.';
 
 export interface RunStepOptions extends Omit<StepPromptInput, 'fileContext'> {
+  /** Files the user referenced with @path; shown to the model along with the step's own files. */
+  referenced?: FileContext[];
   config: SmartConfig;
   cwd: string;
   run: RunClaudeFn;
@@ -118,7 +120,8 @@ export interface StepRunResult {
 
 /** Runs one plan step as one headless Claude Code call on the routed model. */
 export async function runStep(o: RunStepOptions): Promise<StepRunResult> {
-  const fileContext = gatherFiles(o.cwd, o.step.files, o.config.limits.maxContextBytes);
+  const own = gatherFiles(o.cwd, o.step.files, o.config.limits.maxContextBytes);
+  const fileContext = [...(o.referenced ?? []), ...own.filter((f) => !o.referenced?.some((r) => r.path === f.path))];
   const prompt = buildStepPrompt({ ...o, fileContext });
   const touched = new Set<string>();
 

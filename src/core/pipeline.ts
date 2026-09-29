@@ -9,6 +9,7 @@ import { newConversation, recordTask, renderMemory, type Conversation, type Conv
 import { EventBus, type Stage } from './events.js';
 import { SmartError, cancelled, isCancelled } from './errors.js';
 import { projectContext, projectFiles } from './files.js';
+import { resolveMentions } from './mentions.js';
 import { makePlan, singleStepPlan } from './planner.js';
 import { applyWarmCache, route } from './router.js';
 import { reviewStep } from './review.js';
@@ -122,6 +123,10 @@ export class Pipeline {
   get permissionMode(): string {
     return this.permOverride ?? this.config.runner.permissionMode;
   }
+  /** The final message of the last coding step (what `smart -p` prints). */
+  get lastReplyText(): string {
+    return this.lastReply;
+  }
   /** Latest account usage windows Claude reported (may be from a previous run). */
   get accountLimits(): Limits | null {
     return this.limits;
@@ -179,6 +184,8 @@ export class Pipeline {
       this.emitConversation();
       this.announce();
       const memory = renderMemory(this.conv);
+      const referenced = resolveMentions(this.cwd, prompt, this.config.limits.maxContextBytes);
+      if (referenced.length) emit({ type: 'notice', level: 'info', message: `Using ${referenced.length} referenced file${referenced.length === 1 ? '' : 's'}: ${referenced.map((f) => f.path).join(', ')}` });
       if (!dryRun && !this.cp.available && !this.warnedNoGit) {
         this.warnedNoGit = true;
         emit({ type: 'notice', level: 'info', message: 'Not a git repository, so /undo and /diff are unavailable here. Run `git init` to enable them.' });
@@ -203,7 +210,7 @@ export class Pipeline {
         at('plan');
         const p = await makePlan(prompt, classification, {
           config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(), memory,
-          projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd),
+          projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd), referenced,
         });
         this.addCallUsage(p.usage);
         plan = p.plan;
@@ -241,7 +248,7 @@ export class Pipeline {
       const active = plan.steps.filter((s) => !s.skipped);
       let failed = false;
       for (const [index, step] of active.entries()) {
-        const rec = await this.runOneStep({ plan, step, index, total: active.length, classification, touched, current: (s) => at(s), prompt, cursor });
+        const rec = await this.runOneStep({ plan, step, index, total: active.length, classification, touched, current: (s) => at(s), prompt, cursor, referenced });
         summary.steps.push(rec);
         if (rec.outcome !== 'done') {
           failed = true;
@@ -463,6 +470,8 @@ export class Pipeline {
     prompt: string;
     /** Working-tree snapshot before this step; updated to the snapshot after it. */
     cursor: { tree: string | null };
+    /** Files the user referenced with @path (given to the first step). */
+    referenced: import('./runner.js').FileContext[];
   }): Promise<StepRecord> {
     const { plan, step, index, total, classification, touched } = a;
     const stepStart = a.cursor.tree;
@@ -502,7 +511,7 @@ export class Pipeline {
       let ok = false;
       try {
         const res = await runStep({
-          plan, step, index, total, touchedFiles: touched, failure, memory: memory || undefined, note: note || undefined,
+          plan, step, index, total, touchedFiles: touched, failure, memory: memory || undefined, note: note || undefined, referenced: index === 0 ? a.referenced : undefined,
           session: sessionId ? { id: sessionId, resume: resuming } : undefined,
           effort: this.config.runner.effort[tier],
           config: this.config, cwd: this.cwd, run: this.run, route: decision, permissionMode: perm.mode, signal,

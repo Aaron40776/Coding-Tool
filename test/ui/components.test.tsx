@@ -1,7 +1,7 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
 import { CostMeter } from '../../src/ui/components/CostMeter.js';
-import { InputBox, windowText } from '../../src/ui/components/InputBox.js';
+import { InputBox, matchFiles, windowText } from '../../src/ui/components/InputBox.js';
 import { inlineSegments, OutputLog, toRows, wrapText } from '../../src/ui/components/OutputLog.js';
 import { PipelineBar } from '../../src/ui/components/PipelineBar.js';
 import { budget, PlanApproval } from '../../src/ui/components/PlanApproval.js';
@@ -238,6 +238,61 @@ describe('input features', () => {
     stdin.write(KEYS.up);
     await wait();
     expect(lastFrame()).toContain('older');
+  });
+
+  it('a trailing backslash then Enter adds a line instead of sending; the whole text is sent on the next Enter', async () => {
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(<InputBox onSubmit={onSubmit} active />);
+    stdin.write('first line\\');
+    await wait();
+    stdin.write(KEYS.enter);
+    await wait();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain('first line↵');
+    stdin.write('second line');
+    await wait();
+    stdin.write(KEYS.enter);
+    await waitFor(() => onSubmit.mock.calls.length === 1);
+    expect(onSubmit).toHaveBeenCalledWith('first line\nsecond line');
+  });
+
+  it('pasted multi-line text keeps its line breaks and never submits', async () => {
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(<InputBox onSubmit={onSubmit} active />);
+    stdin.write('line one\r\nline two\r\n');
+    await wait();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain('line one↵line two');
+    stdin.write(KEYS.enter);
+    await waitFor(() => onSubmit.mock.calls.length === 1);
+    expect(onSubmit).toHaveBeenCalledWith('line one\nline two');
+  });
+
+  it('matchFiles ranks prefix matches first and only applies to a trailing @word', () => {
+    const files = ['src/app.ts', 'test/app.test.ts', 'README.md', 'src/util.ts'];
+    expect(matchFiles('fix @src/', files)).toEqual({ prefix: 'src/', matches: ['src/app.ts', 'src/util.ts'] });
+    expect(matchFiles('@app', files)?.matches).toEqual(['src/app.ts', 'test/app.test.ts']);
+    expect(matchFiles('@readme', files)?.matches).toEqual(['README.md']);
+    expect(matchFiles('no mention', files)).toBeNull();
+    expect(matchFiles('mail a@b', files)).toBeNull();
+    expect(matchFiles('@src/app.ts and more', files)).toBeNull(); // the @word is no longer at the end
+  });
+
+  it('Tab completes an @file reference (a unique match, or the common prefix)', async () => {
+    const { stdin, lastFrame } = render(<InputBox onSubmit={() => undefined} active files={['src/app.ts', 'src/apple.ts', 'docs/guide.md']} />);
+    stdin.write('look at @src/ap');
+    await wait();
+    stdin.write(KEYS.tab);
+    await wait();
+    expect(lastFrame()).toContain('@src/app'); // common prefix of app.ts and apple.ts
+    stdin.write('l');
+    await wait();
+    stdin.write(KEYS.tab);
+    await wait();
+    expect(lastFrame()).toContain('@src/apple.ts');
+    stdin.write('x');
+    await wait();
+    expect(lastFrame()).not.toContain('@src/apple.tsx@'); // completed with a trailing space
   });
 
   it('matchCommands suggests by prefix only for a bare slash word', () => {

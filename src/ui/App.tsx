@@ -7,11 +7,12 @@ import { costLines, summarize } from '../core/stats.js';
 import type { Tracker } from '../core/tracker.js';
 import { usageLines } from '../core/usage.js';
 import type { ModelTier } from '../core/types.js';
+import { projectFiles } from '../core/files.js';
 import type { InputHistory } from '../core/inputHistory.js';
 import { COMMANDS, HELP_TEXT, matchCommands, modeLabel, parseInput } from './commands.js';
 import { CostMeter } from './components/CostMeter.js';
 import { LimitsMeter } from './components/LimitsMeter.js';
-import { InputBox } from './components/InputBox.js';
+import { InputBox, matchFiles } from './components/InputBox.js';
 import { OutputLog } from './components/OutputLog.js';
 import { PipelineBar } from './components/PipelineBar.js';
 import { PlanApproval } from './components/PlanApproval.js';
@@ -73,6 +74,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
   const [scroll, setScroll] = useState(0);
   const [draft, setDraft] = useState('');
   const [history] = useState(() => inputHistory?.load() ?? []);
+  const [files] = useState(() => projectFiles(cwd, 400));
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -130,7 +132,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
       return;
     }
     // Tab completes a /command while typing one; otherwise it switches panels.
-    if (key.tab && view === 'main' && !(focus === 'input' && draft.startsWith('/'))) {
+    if (key.tab && view === 'main' && !(focus === 'input' && (draft.startsWith('/') || /(?:^|\s)@\S*$/.test(draft)))) {
       const order: Focus[] = steps > 0 ? ['input', 'plan', 'output'] : ['input', 'output'];
       setFocus((f) => order[(order.indexOf(f) + 1) % order.length] ?? 'input');
       return;
@@ -200,10 +202,15 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
   const mainHeight = Math.max(6, size.rows - 7);
   const tags = [dryRun ? 'dry-run' : '', mode ? `mode:${modeLabel(mode)}` : '', forced ? `model:${forced}` : 'model:auto', state.chatTasks > 0 ? `chat:${state.chatTasks}` : ''].filter(Boolean);
   const suggestions = matchCommands(draft);
+  const fileHits = matchFiles(draft, files);
   const hint =
     state.phase === 'approval'
       ? ''
-      : suggestions.length > 0
+      : fileHits
+        ? fileHits.matches.length > 0
+          ? `${fileHits.matches.slice(0, 5).map((f) => `@${f}`).join('  ')}   (Tab completes)`
+          : 'No matching file.'
+        : suggestions.length > 0
         ? suggestions.map((n) => `${n} ${COMMANDS.find((c) => c.name === n)?.help ?? ''}`.trim()).join('  ·  ') + '   (Tab completes)'
         : draft.startsWith('/')
           ? 'No such command. Try /help.'
@@ -252,6 +259,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
         initialHistory={history}
         onDraft={setDraft}
         completions={COMMANDS.map((c) => c.name)}
+        files={files}
         active={focus === 'input' && view === 'main' && state.phase !== 'approval' && state.phase !== 'running'}
         tags={tags}
         placeholder={state.phase === 'idle' ? 'What should we build?' : 'Type another task…'}
