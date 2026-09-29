@@ -212,10 +212,11 @@ describe('App', () => {
       throw new SmartError('auth', 'not logged in', 'Run `claude` to log in');
     };
     const { lastFrame } = render(<App {...makeApp({ complexity: 'small_edit', executor })} initial={{ prompt: 'x' }} oneShot onExit={onExit} />);
+    // One-shot mode exits shortly after finishing and the screen is cleared on exit, so read the error while it is on screen.
+    await waitFor(() => lastFrame()!.includes('Run `claude` to log in'), 4000);
+    expect(lastFrame()).toContain('not logged in');
     await waitFor(() => onExit.mock.calls.length === 1, 4000);
     expect(onExit).toHaveBeenCalledWith(false);
-    expect(lastFrame()).toContain('not logged in');
-    expect(lastFrame()).toContain('Run `claude` to log in');
   });
 
   it('Tab moves focus between panels', async () => {
