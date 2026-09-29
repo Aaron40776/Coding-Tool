@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -166,6 +166,58 @@ describe('change tracking, /diff and /undo', () => {
     expect(t.role('executor')[1]?.prompt).toContain('Files changed in earlier steps: one.txt');
     await t.pipeline.runTask('follow up', { autoApprove: true });
     expect(t.role('classifier')[1]?.prompt).toContain('files: one.txt');
+  });
+});
+
+describe('project directory inside a repository, and paths that differ in spelling from git\'s', () => {
+  it('reports changed paths relative to the project directory when it is a subdirectory of the repo', async () => {
+    const t = await setup({ executor: (_n, cwd) => { write(cwd, 'sub.txt', 'x'); } });
+    // The setup repo root is t.cwd; run a second pipeline rooted in a subdirectory of it.
+    const sub = join(t.cwd, 'pkg');
+    mkdirSync(sub);
+    const checkpoints = await createCheckpoints(sub);
+    made.push(checkpoints);
+    const events: SmartEvent[] = [];
+    const bus = new EventBus();
+    bus.subscribe((e) => events.push(e));
+    const run: RunClaudeFn = async (o) => {
+      const props = (o.jsonSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+      if (props && 'complexity' in props) return res({ structured: { complexity: 'trivial', needsPlan: false, reason: 'r' } });
+      writeFileSync(join(sub, 'inside.txt'), 'x');
+      writeFileSync(join(t.cwd, 'outside.txt'), 'y');
+      return res();
+    };
+    const config = defaultConfig();
+    config.verify.auto = false;
+    await new Pipeline(config, bus, sub, { run, uid: 1000, listFiles: () => [], checkpoints, projectContext: () => '' }).runTask('go');
+    const ch = events.find((e): e is Extract<SmartEvent, { type: 'changes' }> => e.type === 'changes')!;
+    expect(ch.files.map((f) => f.path).sort()).toEqual(['../outside.txt', 'inside.txt']);
+  });
+
+  it('still works when the project path is spelled differently from the repository root (symlink; on Windows, 8.3 short names)', async () => {
+    const t = await setup({ executor: (_n, cwd) => { write(cwd, 'aliased.txt', 'hello\n'); } });
+    const alias = join(mkdtempSync(join(tmpdir(), 'smart-alias-')), 'link');
+    try {
+      symlinkSync(t.cwd, alias, 'junction');
+    } catch {
+      return; // cannot create links here (Windows without privileges): nothing to test
+    }
+    const checkpoints = await createCheckpoints(alias);
+    made.push(checkpoints);
+    const events: SmartEvent[] = [];
+    const bus = new EventBus();
+    bus.subscribe((e) => events.push(e));
+    const run: RunClaudeFn = async (o) => {
+      const props = (o.jsonSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+      if (props && 'complexity' in props) return res({ structured: { complexity: 'trivial', needsPlan: false, reason: 'r' } });
+      writeFileSync(join(alias, 'aliased.txt'), 'hello\n');
+      return res();
+    };
+    const config = defaultConfig();
+    config.verify.auto = false;
+    await new Pipeline(config, bus, alias, { run, uid: 1000, listFiles: () => [], checkpoints, projectContext: () => '' }).runTask('go');
+    const ch = events.find((e): e is Extract<SmartEvent, { type: 'changes' }> => e.type === 'changes')!;
+    expect(ch.files).toEqual([{ path: 'aliased.txt', status: 'A' }]); // not "../real/path/aliased.txt"
   });
 });
 
