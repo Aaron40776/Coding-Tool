@@ -300,7 +300,9 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
         if (result) {
           if (result.isError) {
             const detail = result.text || result.subtype || 'unknown error';
-            return reject(isAuthFailure(detail) ? authError(detail) : new SmartError('claude', `Claude Code reported an error: ${detail}`));
+            const err = isAuthFailure(detail) ? authError(detail) : new SmartError('claude', `Claude Code reported an error: ${detail}`);
+            err.usage = result.usage; // the call still cost money
+            return reject(err);
           }
           return resolve(result);
         }

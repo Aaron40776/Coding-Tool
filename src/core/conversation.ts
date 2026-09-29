@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { withFileLock } from './lock.js';
 import type { Classification, Complexity, ModelTier, Plan } from './types.js';
 
 export interface TaskMemory {
@@ -118,15 +119,17 @@ export class ConversationStore {
   /** Returns an error message when it could not be saved. */
   save(cwd: string, conv: Conversation, now = new Date()): string | null {
     try {
-      const file = this.read();
-      file.byDir[cwd] = { ...conv, updatedAt: now.toISOString() };
-      // Keep the file small: only the 50 most recently used directories.
-      const keep = Object.entries(file.byDir).sort((a, b) => b[1].updatedAt.localeCompare(a[1].updatedAt)).slice(0, 50);
-      file.byDir = Object.fromEntries(keep);
-      mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-      const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`; // unique: two smart sessions must not share a temp file
-      writeFileSync(tmp, JSON.stringify(file, null, 2), { mode: 0o600 });
-      renameSync(tmp, this.path);
+      withFileLock(this.path, () => {
+        const file = this.read();
+        file.byDir[cwd] = { ...conv, updatedAt: now.toISOString() };
+        // Keep the file small: only the 50 most recently used directories.
+        const keep = Object.entries(file.byDir).sort((a, b) => b[1].updatedAt.localeCompare(a[1].updatedAt)).slice(0, 50);
+        file.byDir = Object.fromEntries(keep);
+        mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
+        const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`; // unique: two smart sessions must not share a temp file
+        writeFileSync(tmp, JSON.stringify(file, null, 2), { mode: 0o600 });
+        renameSync(tmp, this.path);
+      });
       return null;
     } catch (e) {
       return `Could not save conversation to ${this.path}: ${(e as Error).message}`;

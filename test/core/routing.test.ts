@@ -275,3 +275,18 @@ describe('finishing a task', () => {
     await running;
   });
 });
+
+describe('spend of failed calls', () => {
+  it('counts what a call that ended in an error cost, so totals and the budget cap stay honest', async () => {
+    const failing = Object.assign(new SmartError('claude', 'error_max_turns'), { usage: { ...emptyUsage(), costUsd: 0.75, outputTokens: 900 } });
+    const t = setup({
+      config: (c) => { c.escalation.retriesPerModel = 0; c.escalation.ladder = ['sonnet']; },
+      executor: () => { throw failing; },
+    });
+    const res = await t.pipeline.runTask('rename foo');
+    expect(res.ok).toBe(false);
+    expect(res.totals.costUsd).toBeGreaterThanOrEqual(0.75);
+    expect(res.totals.outputTokens).toBeGreaterThanOrEqual(900);
+  });
+});
+

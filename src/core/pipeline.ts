@@ -100,14 +100,24 @@ export class Pipeline {
     this.conv = deps.conversation ?? newConversation();
     this.cp = deps.checkpoints ?? new NoCheckpoints();
     this.limits = deps.limits ?? null;
-    const call = (o: Parameters<RunClaudeFn>[0]) =>
-      deps.run({
-        ...o,
-        onEvent: (e) => {
-          if (e.kind === 'limits') this.observeLimits(e.windows, e.status);
-          o.onEvent?.(e);
-        },
-      });
+    const call = async (o: Parameters<RunClaudeFn>[0]) => {
+      try {
+        return await deps.run({
+          ...o,
+          onEvent: (e) => {
+            if (e.kind === 'limits') this.observeLimits(e.windows, e.status);
+            o.onEvent?.(e);
+          },
+        });
+      } catch (e) {
+        // A call that errors (max turns, budget, ...) still spent tokens: count them, or the budget cap and the totals undercount.
+        if (e instanceof SmartError && e.usage) {
+          this.taskUsage = addUsage(this.taskUsage, e.usage);
+          this.bus.emit({ type: 'tokens', usage: e.usage, sessionTotal: this.sessionTotal });
+        }
+        throw e;
+      }
+    };
     // Tool-less calls (classify, plan, review, small talk) start `claude` lean. If that breaks something that lives in the
     // settings files (an apiKeyHelper login, a provider or proxy in `env`), retry once the normal way; when that works,
     // stop using lean flags for this session. If the normal call fails too, lean was not the problem and stays on.

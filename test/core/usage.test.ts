@@ -8,7 +8,7 @@ import { route } from '../../src/core/router.js';
 import { applyLimitPressure, fmtReset, LimitsStore, pct, pressure, tightest, windowLabel } from '../../src/core/usage.js';
 import type { Limits } from '../../src/core/types.js';
 
-const limits = (five: number, seven = 0.1): Limits => ({ at: 1000, windows: { five_hour: { utilization: five, resetsAt: 5000 }, seven_day: { utilization: seven } } });
+const limits = (five: number, seven = 0.1): Limits => ({ at: 1000, windows: { five_hour: { utilization: five, resetsAt: 4_000_000_000 }, seven_day: { utilization: seven } } });
 const opus = () => route({ classification: { complexity: 'large_build', needsPlan: true, reason: '' }, text: 'x' }, { ...defaultConfig(), routing: { ...defaultConfig().routing, large_build: 'opus' } });
 
 describe('rate_limit_event parsing', () => {
@@ -80,5 +80,15 @@ describe('LimitsStore', () => {
     expect(new LimitsStore(join(dir, 'bad.json')).load()).toBeNull();
     writeFileSync(join(dir, 'file'), 'x');
     expect(() => new LimitsStore(join(dir, 'file', 'l.json')).save(limits(0.1))).not.toThrow();
+  });
+});
+
+describe('expired windows', () => {
+  it('ignores a window that has already reset (stale limits.json) for routing and warnings', () => {
+    const now = 1_800_000_000_000;
+    const stale = { at: 0, windows: { five_hour: { utilization: 0.97, resetsAt: now / 1000 - 3600 }, seven_day: { utilization: 0.2, resetsAt: now / 1000 + 86400 } } };
+    expect(tightest(stale, now)?.name).toBe('seven_day');
+    expect(tightest({ at: 0, windows: { five_hour: { utilization: 0.97, resetsAt: now / 1000 - 1 } } }, now)).toBeNull();
+    expect(tightest({ at: 0, windows: { five_hour: { utilization: 0.97 } } }, now)?.name).toBe('five_hour'); // no reset time known: keep it
   });
 });

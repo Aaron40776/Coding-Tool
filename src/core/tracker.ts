@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { withFileLock } from './lock.js';
 import type { Classification, Usage } from './types.js';
-import { addUsage, emptyUsage } from './types.js';
 
 export type StepOutcome = 'done' | 'failed' | 'cancelled' | 'skipped';
 
@@ -38,39 +38,6 @@ interface HistoryFile {
 const MAX_TASKS = 1000;
 const MAX_PROMPT = 500;
 
-export interface ModelStats {
-  model: string;
-  steps: number;
-  usage: Usage;
-}
-
-export interface Stats {
-  tasks: number;
-  succeeded: number;
-  totals: Usage;
-  byModel: ModelStats[];
-}
-
-export function aggregate(tasks: TaskRecord[]): Stats {
-  const byModel = new Map<string, ModelStats>();
-  let totals = emptyUsage();
-  for (const t of tasks) {
-    totals = addUsage(totals, t.totals);
-    for (const s of t.steps) {
-      const m = byModel.get(s.model) ?? { model: s.model, steps: 0, usage: emptyUsage() };
-      m.steps += 1;
-      m.usage = addUsage(m.usage, s.usage);
-      byModel.set(s.model, m);
-    }
-  }
-  return {
-    tasks: tasks.length,
-    succeeded: tasks.filter((t) => t.ok).length,
-    totals,
-    byModel: [...byModel.values()].sort((a, b) => b.usage.costUsd - a.usage.costUsd),
-  };
-}
-
 /** Append-only task log in a single local JSON file. Never throws into the pipeline. */
 export class Tracker {
   constructor(private readonly path: string) {}
@@ -94,18 +61,17 @@ export class Tracker {
   /** Returns an error message when the record could not be persisted. */
   append(record: TaskRecord): string | null {
     try {
-      const tasks = [...this.load(), { ...record, prompt: record.prompt.slice(0, MAX_PROMPT) }].slice(-MAX_TASKS);
-      mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-      const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`; // unique: two smart sessions must not share a temp file
-      writeFileSync(tmp, JSON.stringify({ version: 1, tasks } satisfies HistoryFile, null, 2), { mode: 0o600 });
-      renameSync(tmp, this.path);
+      withFileLock(this.path, () => {
+        const tasks = [...this.load(), { ...record, prompt: record.prompt.slice(0, MAX_PROMPT) }].slice(-MAX_TASKS);
+        mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
+        const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`; // unique: two smart sessions must not share a temp file
+        writeFileSync(tmp, JSON.stringify({ version: 1, tasks } satisfies HistoryFile, null, 2), { mode: 0o600 });
+        renameSync(tmp, this.path);
+      });
       return null;
     } catch (e) {
       return `Could not write history to ${this.path}: ${(e as Error).message}`;
     }
   }
 
-  stats(): Stats {
-    return aggregate(this.load());
-  }
 }

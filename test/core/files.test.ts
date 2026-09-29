@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { projectFiles } from '../../src/core/files.js';
 
@@ -44,3 +45,19 @@ describe('projectContext', () => {
     expect(projectContext(d, 500).length).toBeLessThanOrEqual(520);
   });
 });
+
+describe('projectFiles (git)', () => {
+  it('skips noise directories and stops at the limit without touching every file', () => {
+    const d = mkdtempSync(join(tmpdir(), 'smart-pf-'));
+    execFileSync('git', ['init', '-q'], { cwd: d });
+    mkdirSync(join(d, 'node_modules', 'pkg'), { recursive: true });
+    mkdirSync(join(d, 'src'));
+    writeFileSync(join(d, 'node_modules', 'pkg', 'index.js'), 'x');
+    for (let i = 0; i < 10; i++) writeFileSync(join(d, 'src', `f${i}.ts`), 'x');
+    execFileSync('git', ['add', '-f', '-A'], { cwd: d }); // even tracked node_modules must not crowd out sources
+    const files = projectFiles(d, 4);
+    expect(files).toHaveLength(4);
+    expect(files.every((f) => f.startsWith('src/'))).toBe(true);
+  });
+});
+
