@@ -98,6 +98,30 @@ describe('reduce', () => {
     expect(reduce(initialState(), { type: 'conversation', tasks: 3, resumed: true }).chatTasks).toBe(3);
   });
 
+  it('records step durations and ends the task with a summary line', () => {
+    const s = apply([
+      { type: 'task:start', taskId: 't', prompt: 'p', dryRun: false, at: 1000 },
+      { type: 'plan:ready', plan, routes: {} },
+      { type: 'step:start', stepId: 's1', title: 'One', route, attempt: 1, at: 2000 },
+      { type: 'step:done', stepId: 's1', at: 14_000 },
+      { type: 'step:start', stepId: 's2', title: 'Two', route, attempt: 1, at: 14_000 },
+      { type: 'step:done', stepId: 's2', at: 20_000 },
+      { type: 'task:done', taskId: 't', totals: { ...emptyUsage(), costUsd: 0.153 }, ok: true, at: 65_000 },
+    ]);
+    expect(s.stepDuration).toEqual({ s1: 12_000, s2: 6000 });
+    expect(s.output.at(-1)?.text).toBe('✓ Done in 1m 04s · $0.15 · 2/2 steps');
+  });
+
+  it('keeps the first start time of a step across retries', () => {
+    const s = apply([
+      { type: 'plan:ready', plan, routes: {} },
+      { type: 'step:start', stepId: 's1', title: 'One', route, attempt: 1, at: 1000 },
+      { type: 'step:start', stepId: 's1', title: 'One', route, attempt: 2, at: 9000 },
+      { type: 'step:done', stepId: 's1', at: 11_000 },
+    ]);
+    expect(s.stepDuration['s1']).toBe(10_000);
+  });
+
   it('caps the output log', () => {
     let s = initialState();
     for (let i = 0; i < 500; i++) s = reduce(s, { type: 'step:output', stepId: 's1', kind: 'text', text: String(i) });
@@ -121,5 +145,17 @@ describe('parseInput', () => {
     expect(parseInput('   ')).toBeNull();
     expect(parseInput('/model gpt')).toMatchObject({ kind: 'error' });
     expect(parseInput('/nope')).toMatchObject({ kind: 'error', message: expect.stringContaining('/nope') });
+  });
+});
+
+describe('shortPath', () => {
+  it('keeps short paths, uses ~ for home, and otherwise the last components', async () => {
+    const { shortPath } = await import('../../src/ui/App.js');
+    expect(shortPath('/a/b', 28)).toBe('/a/b');
+    expect(shortPath('/very/long/path/to/some/project-name', 28)).toBe('…/path/to/some/project-name');
+    expect(shortPath('/very/long/path/to/some/project-name', 20)).toBe('…/some/project-name');
+    expect(shortPath('C:\\Users\\Anton\\Documents\\Projects\\my-app', 28)).toBe('…/Documents/Projects/my-app');
+    expect(shortPath('C:\\Users\\Anton\\Documents\\Projects\\my-app', 20)).toBe('…/Projects/my-app');
+    expect(shortPath('/x/' + 'y'.repeat(60), 20).length).toBeLessThanOrEqual(20);
   });
 });

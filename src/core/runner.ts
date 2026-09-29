@@ -123,7 +123,8 @@ export async function runStep(o: RunStepOptions): Promise<StepRunResult> {
     if (e.kind === 'text') o.onOutput?.('text', e.text);
     else if (e.kind === 'tool') {
       // Show project-relative paths: absolute ones are long and add no information.
-      o.onOutput?.('tool', slash(e.summary.split(`${o.cwd}${sep}`).join('').split(`${o.cwd}/`).join('')));
+      const short = slash(e.summary.split(`${o.cwd}${sep}`).join('').split(`${o.cwd}/`).join(''));
+      o.onOutput?.('tool', short.length > 110 ? `${short.slice(0, 107)}...` : short);
       if (e.writtenFile) touched.add(slash(relative(o.cwd, resolve(o.cwd, e.writtenFile))) || e.writtenFile);
     } else if (e.kind === 'progress') o.onProgress?.(e);
   };

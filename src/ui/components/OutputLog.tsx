@@ -4,6 +4,26 @@ import { ACCENT } from '../theme.js';
 
 const MAX_LINES_PER_ENTRY = 8;
 
+export interface Segment {
+  text: string;
+  style: 'plain' | 'bold' | 'code';
+}
+
+/** Tiny inline-markdown pass for assistant text: **bold**, `code`, "## heading" and "- bullet" lines. */
+export function inlineSegments(line: string): Segment[] {
+  const heading = /^\s*#{1,6}\s+(.*)$/.exec(line);
+  if (heading) return [{ text: heading[1] ?? '', style: 'bold' }];
+  const text = line.replace(/^(\s*)[-*]\s+/, '$1• ');
+  const out: Segment[] = [];
+  for (const part of text.split(/(\*\*[^*]+\*\*|`[^`]+`)/)) {
+    if (!part) continue;
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) out.push({ text: part.slice(2, -2), style: 'bold' });
+    else if (part.startsWith('`') && part.endsWith('`') && part.length > 2) out.push({ text: part.slice(1, -1), style: 'code' });
+    else out.push({ text: part, style: 'plain' });
+  }
+  return out;
+}
+
 interface Row {
   key: string;
   kind: OutputLine['kind'];
@@ -55,7 +75,14 @@ function RowView({ row }: { row: Row }) {
     case 'tool':
       return <Text wrap="truncate-end"><Text color={ACCENT}>⏺ </Text><Text dimColor>{t}</Text></Text>;
     case 'text':
-      return <Text wrap="truncate-end">{`  ${t}`}</Text>;
+      return (
+        <Text wrap="truncate-end">
+          {'  '}
+          {inlineSegments(t).map((seg, i) => (
+            <Text key={i} bold={seg.style === 'bold'} color={seg.style === 'code' ? 'cyan' : undefined}>{seg.text}</Text>
+          ))}
+        </Text>
+      );
     case 'warn':
       return <Text color="yellow" wrap="truncate-end">{row.first ? `! ${t}` : `  ${t}`}</Text>;
     case 'error':

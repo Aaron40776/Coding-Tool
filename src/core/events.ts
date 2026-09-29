@@ -6,20 +6,20 @@ export type StageStatus = 'pending' | 'active' | 'done' | 'skipped' | 'failed';
 
 /** Everything the UI (or any other frontend) can observe. All payloads are plain JSON. */
 export type SmartEvent =
-  | { type: 'task:start'; taskId: string; prompt: string; dryRun: boolean }
+  | { type: 'task:start'; taskId: string; prompt: string; dryRun: boolean; at?: number }
   | { type: 'stage'; stage: Stage; status: StageStatus }
   | { type: 'notice'; level: 'info' | 'warn'; message: string }
   | { type: 'classified'; classification: Classification; route: RouteDecision }
   | { type: 'plan:ready'; plan: Plan; routes: Record<string, RouteDecision> }
   | { type: 'plan:approved'; plan: Plan }
-  | { type: 'step:start'; stepId: string; title: string; route: RouteDecision; attempt: number }
+  | { type: 'step:start'; stepId: string; title: string; route: RouteDecision; attempt: number; at?: number }
   | { type: 'step:output'; stepId: string; kind: 'text' | 'tool'; text: string }
   | { type: 'tokens'; stepId?: string; usage: Usage; sessionTotal: Usage }
   | { type: 'step:verify'; stepId: string; command: string; ok: boolean; output: string }
   | { type: 'step:escalate'; stepId: string; from: ModelTier; to: ModelTier; reason: string }
-  | { type: 'step:done'; stepId: string }
-  | { type: 'step:failed'; stepId: string; error: string }
-  | { type: 'task:done'; taskId: string; totals: Usage; ok: boolean }
+  | { type: 'step:done'; stepId: string; at?: number }
+  | { type: 'step:failed'; stepId: string; error: string; at?: number }
+  | { type: 'task:done'; taskId: string; totals: Usage; ok: boolean; at?: number }
   | { type: 'task:cancelled'; taskId: string }
   | { type: 'conversation'; tasks: number; resumed: boolean }
   | { type: 'error'; kind: ErrorKind; message: string; hint?: string };

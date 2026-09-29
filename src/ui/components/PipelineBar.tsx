@@ -10,10 +10,10 @@ const SHOWN: { stage: Stage; label: string }[] = [
   { stage: 'verify', label: 'verify' },
 ];
 
-function Icon({ status }: { status: StageStatus }) {
+function Icon({ status, still }: { status: StageStatus; still?: boolean }) {
   switch (status) {
     case 'active':
-      return <Spinner color={ACCENT} />;
+      return <Spinner color={ACCENT} still={still} />;
     case 'done':
       return <Text color="green">✓</Text>;
     case 'failed':
@@ -35,7 +35,7 @@ export function PipelineBar({ stages }: { stages: Record<Stage, StageStatus> }) 
         return (
           <Box key={stage}>
             {i > 0 ? <Text dimColor>{' → '}</Text> : null}
-            <Icon status={st} />
+            <Icon status={st} still={stage === 'plan' && stages.approve === 'active'} />
             <Text bold={st === 'active'} dimColor={st === 'pending' || st === 'skipped'}>{` ${label}`}</Text>
             {stage === 'plan' && stages.approve === 'active' ? <Text color="yellow"> (review)</Text> : null}
           </Box>

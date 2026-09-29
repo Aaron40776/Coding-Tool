@@ -33,7 +33,8 @@ export function summarizeTool(name: string, input: unknown): string {
   const i = isObj(input) ? input : {};
   const target = str(i.file_path) || str(i.path) || str(i.command) || str(i.pattern) || str(i.url) || str(i.description);
   const oneLine = target.replace(/\s+/g, ' ').trim();
-  return oneLine ? `${name} ${oneLine.length > 100 ? oneLine.slice(0, 97) + '...' : oneLine}` : name;
+  // Long values are shortened later, after the caller has made paths project-relative.
+  return oneLine ? `${name} ${oneLine.length > 400 ? oneLine.slice(0, 397) + '...' : oneLine}` : name;
 }
 
 function resultUsage(d: Json): Usage {

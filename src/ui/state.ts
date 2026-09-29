@@ -1,6 +1,7 @@
 import type { SmartEvent, Stage, StageStatus } from '../core/events.js';
 import type { Classification, ModelTier, Plan, RouteDecision, Usage } from '../core/types.js';
 import { emptyUsage } from '../core/types.js';
+import { fmtCost, fmtDuration } from './format.js';
 
 export type StepStatus = 'pending' | 'active' | 'verifying' | 'done' | 'failed' | 'skipped' | 'cancelled';
 export type Phase = 'idle' | 'running' | 'approval' | 'finished';
@@ -30,6 +31,10 @@ export interface UiState {
   session: Usage;
   sessionAtTaskStart: Usage;
   ok?: boolean;
+  taskStartedAt?: number;
+  stepStartedAt: Record<string, number>;
+  /** Wall time of finished steps, in ms. */
+  stepDuration: Record<string, number>;
   /** Tasks remembered in the current conversation (follow-ups build on them). */
   chatTasks: number;
   nextId: number;
@@ -43,7 +48,7 @@ export const initialStages = (): Record<Stage, StageStatus> => ({
 
 export const initialState = (): UiState => ({
   phase: 'idle', prompt: '', dryRun: false, stages: initialStages(), routes: {}, stepStatus: {}, stepAttempt: {},
-  escalatedTo: {}, output: [], session: emptyUsage(), sessionAtTaskStart: emptyUsage(), chatTasks: 0, nextId: 1,
+  escalatedTo: {}, output: [], session: emptyUsage(), sessionAtTaskStart: emptyUsage(), chatTasks: 0, stepStartedAt: {}, stepDuration: {}, nextId: 1,
 });
 
 const push = (s: UiState, kind: OutputLine['kind'], text: string, stepId?: string): UiState => ({
@@ -51,6 +56,21 @@ const push = (s: UiState, kind: OutputLine['kind'], text: string, stepId?: strin
   output: [...s.output, { id: s.nextId, kind, text, stepId }].slice(-MAX_OUTPUT),
   nextId: s.nextId + 1,
 });
+
+const withDuration = (s: UiState, stepId: string, at?: number): Record<string, number> => {
+  const started = s.stepStartedAt[stepId];
+  return at !== undefined && started !== undefined ? { ...s.stepDuration, [stepId]: at - started } : s.stepDuration;
+};
+
+/** " in 34s · $0.15 · 5/6 steps" for the final line of a task. */
+function summaryTail(s: UiState, e: Extract<SmartEvent, { type: 'task:done' }>): string {
+  const parts: string[] = [];
+  if (e.at !== undefined && s.taskStartedAt !== undefined) parts.push(`in ${fmtDuration(e.at - s.taskStartedAt)}`);
+  if (e.totals.costUsd > 0) parts.push(fmtCost(e.totals.costUsd));
+  const total = s.plan?.steps.filter((st) => !st.skipped).length ?? 0;
+  if (total > 1) parts.push(`${Object.values(s.stepStatus).filter((v) => v === 'done').length}/${total} steps`);
+  return parts.length ? ` ${parts.join(' · ')}` : '.';
+}
 
 /** Adds a line of user input to the log (dispatched by the App, not the pipeline). */
 export type UiAction = SmartEvent | { type: 'ui:user'; text: string } | { type: 'ui:info'; text: string };
@@ -67,7 +87,7 @@ export function reduce(s: UiState, e: UiAction): UiState {
         {
           ...s, phase: 'running', prompt: e.prompt, dryRun: e.dryRun, stages: initialStages(), classification: undefined, classifyReason: undefined,
           plan: undefined, routes: {}, stepStatus: {}, stepAttempt: {}, escalatedTo: {}, currentStepId: undefined, ok: undefined,
-          sessionAtTaskStart: s.session,
+          sessionAtTaskStart: s.session, taskStartedAt: e.at, stepStartedAt: {}, stepDuration: {},
         },
         'info', e.dryRun ? 'Dry run: classify and plan only, nothing will execute.' : 'Task started.',
       );
@@ -94,6 +114,7 @@ export function reduce(s: UiState, e: UiAction): UiState {
       return push(
         {
           ...s, currentStepId: e.stepId, routes: { ...s.routes, [e.stepId]: e.route },
+          stepStartedAt: e.at !== undefined && s.stepStartedAt[e.stepId] === undefined ? { ...s.stepStartedAt, [e.stepId]: e.at } : s.stepStartedAt,
           stepStatus: { ...s.stepStatus, [e.stepId]: 'active' }, stepAttempt: { ...s.stepAttempt, [e.stepId]: e.attempt },
         },
         'info', `▶ ${e.title} [${e.route.tier}${e.attempt > 1 ? `, attempt ${e.attempt}` : ''}]`, e.stepId,
@@ -107,14 +128,14 @@ export function reduce(s: UiState, e: UiAction): UiState {
     case 'step:escalate':
       return push({ ...s, escalatedTo: { ...s.escalatedTo, [e.stepId]: e.to } }, 'warn', `↑ Escalating ${e.from} → ${e.to} (${e.reason})`, e.stepId);
     case 'step:done':
-      return { ...s, stepStatus: { ...s.stepStatus, [e.stepId]: 'done' } };
+      return { ...s, stepStatus: { ...s.stepStatus, [e.stepId]: 'done' }, stepDuration: withDuration(s, e.stepId, e.at) };
     case 'step:failed':
       return push(
-        { ...s, stepStatus: { ...s.stepStatus, [e.stepId]: e.error === 'Cancelled' ? 'cancelled' : 'failed' } },
+        { ...s, stepStatus: { ...s.stepStatus, [e.stepId]: e.error === 'Cancelled' ? 'cancelled' : 'failed' }, stepDuration: withDuration(s, e.stepId, e.at) },
         e.error === 'Cancelled' ? 'warn' : 'error', e.error === 'Cancelled' ? 'Step cancelled.' : `Step failed: ${e.error}`, e.stepId,
       );
     case 'task:done':
-      return push({ ...s, phase: 'finished', ok: e.ok }, e.ok ? 'info' : 'error', e.ok ? '✓ Done.' : '✗ Task did not complete.');
+      return push({ ...s, phase: 'finished', ok: e.ok }, e.ok ? 'info' : 'error', `${e.ok ? '✓ Done' : '✗ Task did not complete'}${summaryTail(s, e)}`);
     case 'conversation':
       return { ...s, chatTasks: e.tasks };
     case 'task:cancelled':

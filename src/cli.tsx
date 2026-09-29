@@ -7,6 +7,7 @@ import { expandHome, loadConfig } from './core/config.js';
 import { EventBus } from './core/events.js';
 import { SmartError } from './core/errors.js';
 import { ConversationStore } from './core/conversation.js';
+import { InputHistory } from './core/inputHistory.js';
 import { Pipeline } from './core/pipeline.js';
 import { isTier } from './core/router.js';
 import { Tracker } from './core/tracker.js';
@@ -96,13 +97,15 @@ async function main() {
       version={pkg.version}
       permissionMode={config.runner.permissionMode}
       startupNotices={startupNotices}
+      inputHistory={new InputHistory(expandHome(config.historyPath))}
       oneShot={Boolean(task)}
       initial={task ? { prompt: task, dryRun: opts.dryRun, noPlan: !opts.plan, model: opts.model ?? null } : { prompt: '', dryRun: opts.dryRun, noPlan: !opts.plan, model: opts.model ?? null }}
       onExit={(ok) => {
         exitCode = ok ? 0 : 1;
       }}
     />,
-    { exitOnCtrlC: false },
+    // A modest fps cap keeps spinners from redrawing constantly. incrementalRendering is opt-in (SMART_INCREMENTAL=1): see README.
+    { exitOnCtrlC: false, incrementalRendering: process.env.SMART_INCREMENTAL === '1', maxFps: 12 },
   );
   await app.waitUntilExit();
   restore();

@@ -76,6 +76,7 @@ const ConfigSchema = z.object({
   review: z.object({ enabled: z.boolean().default(true) }).prefault({}),
   trackerPath: z.string().default('~/.smart/history.json'),
   conversationsPath: z.string().default('~/.smart/conversations.json'),
+  historyPath: z.string().default('~/.smart/input-history.json'),
 });
 
 export type SmartConfig = z.infer<typeof ConfigSchema>;

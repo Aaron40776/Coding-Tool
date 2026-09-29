@@ -1,14 +1,15 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
 import { CostMeter } from '../../src/ui/components/CostMeter.js';
-import { InputBox } from '../../src/ui/components/InputBox.js';
-import { OutputLog, toRows, wrapText } from '../../src/ui/components/OutputLog.js';
+import { InputBox, windowText } from '../../src/ui/components/InputBox.js';
+import { inlineSegments, OutputLog, toRows, wrapText } from '../../src/ui/components/OutputLog.js';
 import { PipelineBar } from '../../src/ui/components/PipelineBar.js';
-import { PlanApproval } from '../../src/ui/components/PlanApproval.js';
+import { budget, PlanApproval } from '../../src/ui/components/PlanApproval.js';
 import { PlanChecklist } from '../../src/ui/components/PlanChecklist.js';
 import { StatsView } from '../../src/ui/components/StatsView.js';
 import { StepBadge } from '../../src/ui/components/StepBadge.js';
-import { fmtCost, fmtTokens } from '../../src/ui/format.js';
+import { fmtCost, fmtDuration, fmtTokens } from '../../src/ui/format.js';
+import { matchCommands } from '../../src/ui/commands.js';
 import { initialStages } from '../../src/ui/state.js';
 import { aggregate } from '../../src/core/tracker.js';
 import { emptyUsage, type Plan, type RouteDecision } from '../../src/core/types.js';
@@ -35,6 +36,9 @@ describe('format', () => {
     expect(fmtTokens(950)).toBe('950');
     expect(fmtTokens(18_300)).toBe('18.3k');
     expect(fmtTokens(2_500_000)).toBe('2.5M');
+    expect(fmtDuration(400)).toBe('0s');
+    expect(fmtDuration(59_400)).toBe('59s');
+    expect(fmtDuration(125_000)).toBe('2m 05s');
   });
 });
 
@@ -193,6 +197,64 @@ describe('InputBox', () => {
   });
 });
 
+describe('input features', () => {
+  it('windowText keeps the cursor visible in a long line', () => {
+    const long = 'x'.repeat(200);
+    const w = windowText(long, 200, 40);
+    expect(w.before.length + w.at.length + w.after.length).toBeLessThanOrEqual(40);
+    expect(w.before.startsWith('…')).toBe(true);
+    expect(windowText('short', 2, 40)).toEqual({ before: 'sh', at: 'o', after: 'rt' });
+    const mid = windowText('abcdefghij'.repeat(10), 50, 20);
+    expect(mid.before.length + 1 + mid.after.length).toBeLessThanOrEqual(20);
+  });
+
+  it('a very long prompt stays on one line inside the box', async () => {
+    const { stdin, lastFrame } = render(<InputBox onSubmit={() => undefined} active width={60} />);
+    stdin.write('word '.repeat(60));
+    await wait();
+    const frame = lastFrame()!;
+    expect(frame.split('\n')).toHaveLength(3); // top border, one line, bottom border
+    expect(frame).toContain('…');
+  });
+
+  it('Tab completes a slash command and reports drafts', async () => {
+    const drafts: string[] = [];
+    const { stdin, lastFrame } = render(<InputBox onSubmit={() => undefined} active completions={['/stats', '/model', '/dry']} onDraft={(d) => drafts.push(d)} />);
+    stdin.write('/mo');
+    await wait();
+    stdin.write(KEYS.tab);
+    await wait();
+    expect(lastFrame()).toContain('/model');
+    expect(drafts.at(-1)).toBe('/model ');
+  });
+
+  it('starts with the history it is given', async () => {
+    const { stdin, lastFrame } = render(<InputBox onSubmit={() => undefined} active initialHistory={['older', 'newer']} />);
+    stdin.write(KEYS.up);
+    await wait();
+    expect(lastFrame()).toContain('newer');
+    stdin.write(KEYS.up);
+    await wait();
+    expect(lastFrame()).toContain('older');
+  });
+
+  it('matchCommands suggests by prefix only for a bare slash word', () => {
+    expect(matchCommands('/')).toEqual(['/stats', '/model', '/dry', '/new', '/help', '/quit']);
+    expect(matchCommands('/st')).toEqual(['/stats']);
+    expect(matchCommands('/model opus')).toEqual([]);
+    expect(matchCommands('hello')).toEqual([]);
+  });
+
+  it('inlineSegments styles bold, code, headings and bullets', () => {
+    expect(inlineSegments('use **bold** and `code` here')).toEqual([
+      { text: 'use ', style: 'plain' }, { text: 'bold', style: 'bold' }, { text: ' and ', style: 'plain' }, { text: 'code', style: 'code' }, { text: ' here', style: 'plain' },
+    ]);
+    expect(inlineSegments('## Heading')).toEqual([{ text: 'Heading', style: 'bold' }]);
+    expect(inlineSegments('- item')[0]?.text).toBe('• item');
+    expect(inlineSegments('plain')).toEqual([{ text: 'plain', style: 'plain' }]);
+  });
+});
+
 describe('PlanApproval', () => {
   const setup = () => {
     const onApprove = vi.fn();
@@ -234,7 +296,7 @@ describe('PlanApproval', () => {
     const { stdin, lastFrame, onApprove } = setup();
     stdin.write('m');
     await wait();
-    expect(lastFrame()).toContain('(your choice)');
+    expect(lastFrame()).toContain('(yours)');
     stdin.write(KEYS.enter);
     await waitFor(() => onApprove.mock.calls.length === 1);
     expect(onApprove.mock.calls[0]![0].steps[0].tier).toBe('haiku');
@@ -273,6 +335,76 @@ describe('PlanApproval', () => {
     const { stdin, onCancel } = setup();
     stdin.write(KEYS.esc);
     await waitFor(() => onCancel.mock.calls.length === 1);
+  });
+});
+
+describe('PlanApproval: long plans on small terminals (regression)', () => {
+  const longText = 'Implement the game loop with a fixed timestep, keep state immutable, and make randomness injectable so tests are deterministic. ';
+  const bigPlan: Plan = {
+    summary: 'A browser game with a pure logic module and a canvas front end, built in small verifiable steps. '.repeat(3),
+    features: [],
+    fileStructure: [],
+    steps: Array.from({ length: 9 }, (_, i) => ({
+      id: `s${i + 1}`, title: `Step ${i + 1}: ${'A rather long step title that needs wrapping '.repeat(2)}`, instructions: `${longText.repeat(4)}END-OF-STEP-${i + 1}`,
+      files: ['a.js', 'b.js'], acceptance: ['first criterion that is fairly long and descriptive', 'second criterion', 'third criterion'],
+    })),
+  };
+  const routes9 = Object.fromEntries(bigPlan.steps.map((s) => [s.id, route('sonnet')]));
+
+  it('budget() never allocates more rows than exist', () => {
+    for (let inner = 10; inner <= 60; inner++) {
+      for (const steps of [1, 3, 9, 20]) {
+        for (const warn of [false, true]) {
+          const { list, detail } = budget(inner, 2, steps, warn);
+          expect(list).toBeGreaterThanOrEqual(1);
+          expect(detail).toBeGreaterThanOrEqual(1);
+          if (inner >= 16) expect(1 + 2 + 1 + list + 1 + 2 + detail + 1 + (warn ? 1 : 0)).toBeLessThanOrEqual(inner);
+        }
+      }
+    }
+  });
+
+  it.each([[80, 22], [100, 28], [60, 18], [140, 40]])('fits %ix%i exactly and keeps the key hints visible', (w, h) => {
+    const f = render(<PlanApproval plan={bigPlan} routes={routes9} onApprove={() => undefined} onCancel={() => undefined} width={w} height={h} />).lastFrame()!;
+    const lines = f.split('\n');
+    expect(lines.length).toBeLessThanOrEqual(h);
+    expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(w);
+    expect(f).toContain('Esc cancel');
+    expect(f).toContain('Review plan');
+  });
+
+  it('shows the full text of a step by scrolling instead of cutting it off', async () => {
+    const { stdin, lastFrame } = render(<PlanApproval plan={bigPlan} routes={routes9} onApprove={() => undefined} onCancel={() => undefined} width={80} height={22} />);
+    expect(lastFrame()).not.toContain('END-OF-STEP-1');
+    expect(lastFrame()).toMatch(/more lines \(PgDn\)/);
+    let sawEnd = false;
+    for (let i = 0; i < 20 && !lastFrame()!.includes('third criterion'); i++) {
+      stdin.write('\u001b[6~'); // PageDown
+      await wait();
+      sawEnd ||= lastFrame()!.includes('END-OF-STEP-1');
+    }
+    expect(sawEnd).toBe(true); // the end of the instructions came into view while scrolling
+    expect(lastFrame()).toContain('third criterion'); // and so did the last acceptance criterion
+  });
+
+  it('keeps the selected step visible when there are more steps than rows', async () => {
+    const { stdin, lastFrame } = render(<PlanApproval plan={bigPlan} routes={routes9} onApprove={() => undefined} onCancel={() => undefined} width={100} height={20} />);
+    for (let i = 0; i < 8; i++) {
+      stdin.write(KEYS.down);
+      await wait();
+    }
+    expect(lastFrame()).toContain('step 9 of 9');
+    expect(lastFrame()).toContain('▸ [x] 9.');
+  });
+
+  it('shows the end of the buffer while editing a long instruction', async () => {
+    const { stdin, lastFrame } = render(<PlanApproval plan={bigPlan} routes={routes9} onApprove={() => undefined} onCancel={() => undefined} width={80} height={22} />);
+    stdin.write('i');
+    await wait();
+    stdin.write(' TYPED-AT-THE-END');
+    await wait();
+    expect(lastFrame()).toContain('TYPED-AT-THE-END');
+    expect(lastFrame()!.split('\n').length).toBeLessThanOrEqual(22);
   });
 });
 

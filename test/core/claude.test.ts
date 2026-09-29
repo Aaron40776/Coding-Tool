@@ -56,6 +56,13 @@ describe('StreamParser', () => {
     expect(tools.map((t) => t.writtenFile)).toEqual(['/p/a.ts', '/p/a.ts', undefined]);
   });
 
+  it('does not truncate long tool paths in the parser (the runner shortens them after making them relative)', () => {
+    const deep = '/very/long/'.repeat(12) + 'file.ts';
+    const evs = new StreamParser().push(JSON.stringify({ type: 'assistant', message: { id: 'x', content: [{ type: 'tool_use', name: 'Read', input: { file_path: deep } }] } }) + '\n');
+    const tool = evs.find((e) => e.kind === 'tool');
+    expect(tool && tool.kind === 'tool' && tool.summary.endsWith('file.ts')).toBe(true);
+  });
+
   it('flags error results', () => {
     const [ev] = new StreamParser().push(JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, result: '' }) + '\n');
     expect(ev && ev.kind === 'result' && ev.result.isError).toBe(true);

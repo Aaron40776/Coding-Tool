@@ -3,7 +3,7 @@ import type { Stats, TaskRecord } from '../../core/tracker.js';
 import { billableTokens, fmtCost, fmtTokens } from '../format.js';
 import { ACCENT } from '../theme.js';
 
-export function StatsView({ stats, recent, path, height }: { stats: Stats; recent: TaskRecord[]; path: string; height?: number }) {
+export function StatsView({ stats, recent, path, height }: { stats: Stats; recent: TaskRecord[]; path: string; height?: number; width?: number }) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} flexGrow={1} height={height} overflow="hidden">
       <Text bold color={ACCENT}>Usage history</Text>

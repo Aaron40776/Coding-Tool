@@ -132,7 +132,7 @@ export class Pipeline {
     };
 
     try {
-      emit({ type: 'task:start', taskId, prompt, dryRun });
+      emit({ type: 'task:start', taskId, prompt, dryRun, at: this.now() });
       this.emitConversation();
       this.announce();
       const memory = renderMemory(this.conv);
@@ -319,7 +319,7 @@ export class Pipeline {
       rec.tier = tier;
       rec.model = decision.model;
       emit({ type: 'stage', stage: 'verify', status: 'pending' });
-      emit({ type: 'step:start', stepId: step.id, title: step.title, route: decision, attempt: rec.attempts });
+      emit({ type: 'step:start', stepId: step.id, title: step.title, route: decision, attempt: rec.attempts, at: this.now() });
       a.current('execute');
 
       // One persisted Claude Code session per conversation: steps and follow-up tasks resume it.
@@ -370,7 +370,7 @@ export class Pipeline {
       } catch (e) {
         if (isCancelled(e)) {
           rec.outcome = 'cancelled';
-          emit({ type: 'step:failed', stepId: step.id, error: 'Cancelled' });
+          emit({ type: 'step:failed', stepId: step.id, error: 'Cancelled', at: this.now() });
           return rec;
         }
         // The saved Claude Code session is gone (cleaned up, other machine): start a new one, carrying our memory.
@@ -387,7 +387,7 @@ export class Pipeline {
 
       if (ok) {
         rec.outcome = 'done';
-        emit({ type: 'step:done', stepId: step.id });
+        emit({ type: 'step:done', stepId: step.id, at: this.now() });
         return rec;
       }
 
@@ -396,7 +396,7 @@ export class Pipeline {
       const next = this.forced ? (failuresOnTier <= this.config.escalation.retriesPerModel ? ({ action: 'retry', tier } as const) : ({ action: 'give_up' } as const)) : nextAttempt({ tier, failuresOnTier }, this.config);
       if (next.action === 'give_up') {
         rec.outcome = 'failed';
-        emit({ type: 'step:failed', stepId: step.id, error: failure ?? 'failed' });
+        emit({ type: 'step:failed', stepId: step.id, error: failure ?? 'failed', at: this.now() });
         return rec;
       }
       if (next.action === 'escalate') {
@@ -440,7 +440,7 @@ export class Pipeline {
     }
     if (!aborted) {
       this.bus.emit({ type: 'stage', stage: 'done', status: summary.ok ? 'done' : 'failed' });
-      this.bus.emit({ type: 'task:done', taskId: summary.taskId, totals: summary.totals, ok: summary.ok });
+      this.bus.emit({ type: 'task:done', taskId: summary.taskId, totals: summary.totals, ok: summary.ok, at: this.now() });
     }
     return summary;
   }

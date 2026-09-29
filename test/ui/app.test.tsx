@@ -33,7 +33,7 @@ describe('App', () => {
     };
     const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'small_edit', executor })} />);
     await type(stdin, 'fix the typo');
-    await waitFor(() => lastFrame()!.includes('✓ Done.'));
+    await waitFor(() => lastFrame()!.includes('✓ Done'));
     const f = lastFrame()!;
     expect(f).toContain('> fix the typo');
     expect(f).toContain('Classified as small_edit');
@@ -47,7 +47,7 @@ describe('App', () => {
   it('dry run shows classification, plan and per-step model without executing', async () => {
     const executor = vi.fn<RunClaudeFn>();
     const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'trivial', executor })} initial={{ prompt: 'what is a monad', dryRun: true }} />);
-    await waitFor(() => lastFrame()!.includes('✓ Done.'));
+    await waitFor(() => lastFrame()!.includes('✓ Done'));
     const f = lastFrame()!;
     expect(f).toContain('Dry run');
     expect(f).toContain('Haiku');
@@ -94,7 +94,7 @@ describe('App', () => {
 
   it('forced --model from the CLI applies to routing', async () => {
     const { lastFrame } = render(<App {...makeApp({ complexity: 'trivial' })} initial={{ prompt: 'x', dryRun: true, model: 'opus' }} />);
-    await waitFor(() => lastFrame()!.includes('✓ Done.'));
+    await waitFor(() => lastFrame()!.includes('✓ Done'));
     expect(lastFrame()).toContain('forced to opus');
     expect(lastFrame()).toContain('[model:opus]');
   });
@@ -131,10 +131,22 @@ describe('App', () => {
     stdin.write(' '); // skip step 2
     await wait();
     stdin.write(KEYS.enter);
-    await waitFor(() => lastFrame()!.includes('✓ Done.'), 4000);
+    await waitFor(() => lastFrame()!.includes('✓ Done'), 4000);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain('do 1');
     expect(lastFrame()).toContain('1. First');
+  });
+
+  it('never renders a frame as tall as the terminal (Ink clears the whole screen when it does, which flickers)', async () => {
+    const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'large_build' })} />);
+    const rows = 30; // ink-testing-library's default stdout has no rows; App falls back to 30
+    expect(lastFrame()!.split('\n').length).toBeLessThan(rows);
+    await type(stdin, 'build something big');
+    await waitFor(() => lastFrame()!.includes('Review plan'), 4000);
+    expect(lastFrame()!.split('\n').length).toBeLessThan(rows);
+    stdin.write(KEYS.enter);
+    await waitFor(() => lastFrame()!.includes('✓ Done'), 4000);
+    expect(lastFrame()!.split('\n').length).toBeLessThan(rows);
   });
 
   it('Esc at the approval screen cancels the task', async () => {
@@ -150,7 +162,7 @@ describe('App', () => {
     const ctx = makeApp({ complexity: 'trivial' });
     const { stdin, lastFrame } = render(<App {...ctx} />);
     await type(stdin, 'first task');
-    await waitFor(() => lastFrame()!.includes('✓ Done.'));
+    await waitFor(() => lastFrame()!.includes('✓ Done'));
     await type(stdin, '/stats');
     await waitFor(() => lastFrame()!.includes('Usage history'));
     expect(lastFrame()).toContain('first task');
@@ -180,7 +192,7 @@ describe('App', () => {
 
   it('Tab moves focus between panels', async () => {
     const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'trivial' })} initial={{ prompt: 'x', dryRun: true }} />);
-    await waitFor(() => lastFrame()!.includes('✓ Done.'));
+    await waitFor(() => lastFrame()!.includes('✓ Done'));
     stdin.write(KEYS.tab);
     await wait();
     stdin.write(KEYS.tab);

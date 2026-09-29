@@ -42,6 +42,21 @@ export function parseInput(raw: string): Command | null {
   }
 }
 
+/** Commands offered by Tab completion and the suggestion line. */
+export const COMMANDS: { name: string; help: string }[] = [
+  { name: '/stats', help: 'usage history' },
+  { name: '/model', help: 'force haiku | sonnet | opus | auto' },
+  { name: '/dry', help: 'toggle dry-run' },
+  { name: '/new', help: 'fresh conversation' },
+  { name: '/help', help: 'show help' },
+  { name: '/quit', help: 'exit' },
+];
+
+export function matchCommands(draft: string): string[] {
+  if (!draft.startsWith('/') || /\s/.test(draft)) return [];
+  return COMMANDS.map((c) => c.name).filter((n) => n.startsWith(draft.toLowerCase()));
+}
+
 export const HELP_TEXT = [
   'Type a task and press Enter. Commands:',
   '  /stats            show cost history',

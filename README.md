@@ -47,10 +47,12 @@ smart -c                             # continue the previous conversation in thi
 | `/model <haiku\|sonnet\|opus\|auto>` | force a model |
 | `/dry` | toggle dry-run |
 | `/new` | start a fresh conversation (forget earlier tasks) |
+
+Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prompts (kept across sessions).
 | `/help`, `/quit`, `Ctrl+C` | help, quit |
 
 **Plan approval.** After planning, review the plan: `↑ ↓` select, `Space` skip a step, `m` pick a model for a step,
-`e` / `i` edit a step's title / instructions, `Enter` run, `Esc` cancel.
+`e` / `i` edit a step's title / instructions, `PgUp` / `PgDn` scroll a long step, `Enter` run, `Esc` cancel. Full step text is always reachable, even on a small terminal.
 
 ### The screen
 

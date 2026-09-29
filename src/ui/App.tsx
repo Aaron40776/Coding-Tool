@@ -5,7 +5,8 @@ import type { EventBus } from '../core/events.js';
 import type { Pipeline } from '../core/pipeline.js';
 import type { Tracker } from '../core/tracker.js';
 import type { ModelTier } from '../core/types.js';
-import { HELP_TEXT, parseInput } from './commands.js';
+import type { InputHistory } from '../core/inputHistory.js';
+import { COMMANDS, HELP_TEXT, matchCommands, parseInput } from './commands.js';
 import { CostMeter } from './components/CostMeter.js';
 import { InputBox } from './components/InputBox.js';
 import { OutputLog } from './components/OutputLog.js';
@@ -18,10 +19,19 @@ import { ACCENT } from './theme.js';
 
 type Focus = 'input' | 'plan' | 'output';
 
+/** Home as ~, and when too long only the last path components: `…/parent/project`. */
 export function shortPath(p: string, max = 28): string {
   const home = homedir();
   const withTilde = home && p.startsWith(home) ? `~${p.slice(home.length)}` : p;
-  return withTilde.length > max ? `…${withTilde.slice(-(max - 1))}` : withTilde;
+  if (withTilde.length <= max) return withTilde;
+  const parts = withTilde.split(/[\\/]/).filter(Boolean);
+  let out = parts.at(-1) ?? withTilde;
+  for (let i = parts.length - 2; i >= 0; i--) {
+    const next = `${parts[i]}/${out}`;
+    if (next.length + 2 > max) break;
+    out = next;
+  }
+  return out.length + 2 > max ? `…${out.slice(-(max - 1))}` : `…/${out}`;
 }
 
 export interface AppProps {
@@ -33,6 +43,7 @@ export interface AppProps {
   version: string;
   permissionMode: string;
   initial?: { prompt: string; dryRun?: boolean; noPlan?: boolean; model?: ModelTier | null };
+  inputHistory?: InputHistory;
   /** Info lines shown at startup (e.g. "Continuing your previous conversation"). */
   startupNotices?: string[];
   /** One-shot mode: exit when the task finishes. */
@@ -42,7 +53,7 @@ export interface AppProps {
 
 const WELCOME = ['Claude Code, routed to the cheapest capable model.', 'Type a task and press Enter, e.g. "make me a snake game".', '/help lists commands.'];
 
-export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permissionMode, initial, startupNotices, oneShot, onExit }: AppProps) {
+export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permissionMode, initial, startupNotices, inputHistory, oneShot, onExit }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [size, setSize] = useState({ cols: stdout.columns ?? 100, rows: stdout.rows ?? 30 });
@@ -53,6 +64,8 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
   const [forced, setForced] = useState<ModelTier | null>(initial?.model ?? null);
   const [selected, setSelected] = useState(0);
   const [scroll, setScroll] = useState(0);
+  const [draft, setDraft] = useState('');
+  const [history] = useState(() => inputHistory?.load() ?? []);
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -109,7 +122,8 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
       else if (focus !== 'input') setFocus('input');
       return;
     }
-    if (key.tab && view === 'main') {
+    // Tab completes a /command while typing one; otherwise it switches panels.
+    if (key.tab && view === 'main' && !(focus === 'input' && draft.startsWith('/'))) {
       const order: Focus[] = steps > 0 ? ['input', 'plan', 'output'] : ['input', 'output'];
       setFocus((f) => order[(order.indexOf(f) + 1) % order.length] ?? 'input');
       return;
@@ -129,6 +143,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
   const onSubmit = (text: string) => {
     const cmd = parseInput(text);
     if (!cmd) return;
+    inputHistory?.push(text);
     switch (cmd.kind) {
       case 'task':
         return startTask(cmd.prompt);
@@ -158,45 +173,61 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
   // header 1 + pipeline 1 + input 3 + hint 1 = 6, plus one spare row: Ink clears the screen when output fills every row.
   const mainHeight = Math.max(6, size.rows - 7);
   const tags = [dryRun ? 'dry-run' : '', forced ? `model:${forced}` : 'model:auto', state.chatTasks > 0 ? `chat:${state.chatTasks}` : ''].filter(Boolean);
-  const hint = state.phase === 'approval' ? '' : busy ? 'Esc cancel · Tab panel' : 'Enter send · Tab panel · /stats /model /dry /help · Ctrl+C quit';
+  const suggestions = matchCommands(draft);
+  const hint =
+    state.phase === 'approval'
+      ? ''
+      : suggestions.length > 0
+        ? suggestions.map((n) => `${n} ${COMMANDS.find((c) => c.name === n)?.help ?? ''}`.trim()).join('  ·  ') + '   (Tab completes)'
+        : draft.startsWith('/')
+          ? 'No such command. Try /help.'
+          : busy
+            ? 'Esc cancel · Tab panel'
+            : 'Enter send · Tab panel · /stats /model /dry /new /help · Ctrl+C quit';
+  const wide = size.cols >= 120;
 
   return (
-    <Box flexDirection="column" width={size.cols} height={size.rows}>
+    // One row shorter than the terminal: when Ink's output fills every row it clears the whole screen on each frame (flicker).
+    <Box flexDirection="column" width={size.cols} height={size.rows - 1}>
       <Box justifyContent="space-between" paddingX={1} height={1}>
         <Box flexShrink={1}>
           <Text wrap="truncate-end">
             <Text color={ACCENT} bold>✻ smart</Text>
-            <Text dimColor>{` v${version} · ${shortPath(cwd)}${permissionMode === 'bypassPermissions' ? ' · bypass' : ''}`}</Text>
+            <Text dimColor>{` v${version}${size.cols >= 120 ? ` · ${shortPath(cwd)}` : ''}${permissionMode === 'bypassPermissions' ? ' · bypass' : ''}`}</Text>
           </Text>
         </Box>
         <Box flexShrink={0} marginLeft={2}>
-          <CostMeter task={taskUsage(state)} session={state.session} showTask={state.phase !== 'idle'} />
+          <CostMeter task={taskUsage(state)} session={state.session} showTask={state.phase !== 'idle'} compact={!wide} />
         </Box>
       </Box>
       <Box paddingX={1}>
         <PipelineBar stages={state.stages} />
       </Box>
       {state.phase === 'approval' && state.plan ? (
-        <PlanApproval plan={state.plan} routes={state.routes} onApprove={(p) => pipeline.approvePlan(p)} onCancel={() => pipeline.cancel()} height={mainHeight} />
+        <PlanApproval plan={state.plan} routes={state.routes} onApprove={(p) => pipeline.approvePlan(p)} onCancel={() => pipeline.cancel()} height={mainHeight} width={size.cols} />
       ) : view === 'stats' ? (
-        <StatsView stats={tracker.stats()} recent={tracker.load().slice(-6).reverse()} path={trackerPath} height={mainHeight} />
+        <StatsView stats={tracker.stats()} recent={tracker.load().slice(-6).reverse()} path={trackerPath} height={mainHeight} width={size.cols} />
       ) : (
         <Box height={mainHeight}>
           <Box width="40%" flexShrink={0} flexDirection="column">
-            <PlanChecklist plan={state.plan} routes={state.routes} stepStatus={state.stepStatus} escalatedTo={state.escalatedTo} selected={selected} focused={focus === 'plan'} height={mainHeight} />
+            <PlanChecklist plan={state.plan} routes={state.routes} stepStatus={state.stepStatus} escalatedTo={state.escalatedTo} durations={state.stepDuration} selected={selected} focused={focus === 'plan'} height={mainHeight} />
           </Box>
           <OutputLog lines={state.output} height={mainHeight} scroll={scroll} width={size.cols - Math.floor(size.cols * 0.4) - 4} focused={focus === 'output'} welcome={WELCOME} />
         </Box>
       )}
       <InputBox
         onSubmit={onSubmit}
+        width={size.cols}
+        initialHistory={history}
+        onDraft={setDraft}
+        completions={COMMANDS.map((c) => c.name)}
         active={focus === 'input' && view === 'main' && state.phase !== 'approval' && state.phase !== 'running'}
         tags={tags}
         placeholder={state.phase === 'idle' ? 'What should we build?' : 'Type another task…'}
         busyText={state.phase === 'running' ? 'Working… (Esc to cancel)' : undefined}
       />
       <Box paddingX={1}>
-        <Text dimColor>{hint}</Text>
+        <Text dimColor wrap="truncate-end">{hint}</Text>
       </Box>
     </Box>
   );

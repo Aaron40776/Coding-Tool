@@ -2,7 +2,15 @@ import { Text } from 'ink';
 import type { Usage } from '../../core/types.js';
 import { billableTokens, fmtCost, fmtTokens } from '../format.js';
 
-export function CostMeter({ task, session, showTask }: { task: Usage; session: Usage; showTask: boolean }) {
+export function CostMeter({ task, session, showTask, compact }: { task: Usage; session: Usage; showTask: boolean; compact?: boolean }) {
+  if (compact) {
+    return (
+      <Text>
+        <Text dimColor>session </Text>
+        <Text bold color="yellow">{fmtCost(session.costUsd)}</Text>
+      </Text>
+    );
+  }
   return (
     <Text>
       {showTask ? (

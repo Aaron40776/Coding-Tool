@@ -2,6 +2,7 @@ import { Box, Text, useInput } from 'ink';
 import type { ModelTier, Plan, RouteDecision } from '../../core/types.js';
 import { ACCENT } from '../theme.js';
 import { useLive } from '../useLive.js';
+import { wrapText } from './OutputLog.js';
 import { StepBadge } from './StepBadge.js';
 
 const CYCLE: (ModelTier | undefined)[] = [undefined, 'haiku', 'sonnet', 'opus'];
@@ -13,15 +14,30 @@ export interface PlanApprovalProps {
   routes: Record<string, RouteDecision>;
   onApprove: (plan: Plan) => void;
   onCancel: () => void;
+  /** Total height and width available; every line is pre-wrapped so nothing overflows the terminal. */
   height?: number;
+  width?: number;
+}
+
+/** Splits the available rows between the step list and the detail box. Exported for tests. */
+export function budget(inner: number, summaryLines: number, steps: number, hasWarning: boolean): { list: number; detail: number } {
+  // title + summary + blank + blank + detail borders(2) + hint (+ warning)
+  const fixed = 1 + summaryLines + 1 + 1 + 2 + 1 + (hasWarning ? 1 : 0);
+  const room = Math.max(2, inner - fixed);
+  const list = Math.min(steps, Math.max(3, room - 6));
+  const listClamped = Math.max(1, Math.min(list, room - 1));
+  return { list: listClamped, detail: Math.max(1, room - listClamped) };
 }
 
 /** Review screen: skip steps, override a step's model, edit its title/instructions, then approve. */
-export function PlanApproval({ plan, routes, onApprove, onCancel, height }: PlanApprovalProps) {
-  const [get, set] = useLive<{ steps: Plan['steps']; cursor: number; edit: Edit; warning: string }>({ steps: plan.steps, cursor: 0, edit: null, warning: '' });
+export function PlanApproval({ plan, routes, onApprove, onCancel, height = 24, width = 100 }: PlanApprovalProps) {
+  const [get, set] = useLive<{ steps: Plan['steps']; cursor: number; edit: Edit; warning: string; dscroll: number }>({
+    steps: plan.steps, cursor: 0, edit: null, warning: '', dscroll: 0,
+  });
 
   const patch = (i: number, p: Partial<Plan['steps'][number]>) =>
     set((s) => ({ ...s, steps: s.steps.map((st, j) => (j === i ? { ...st, ...p } : st)) }));
+  const move = (cursor: number) => set((s) => ({ ...s, cursor, dscroll: 0 }));
 
   useInput((input, key) => {
     const { steps, cursor, edit } = get();
@@ -36,8 +52,10 @@ export function PlanApproval({ plan, routes, onApprove, onCancel, height }: Plan
       return;
     }
     const step = steps[cursor];
-    if (key.upArrow) set((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
-    else if (key.downArrow) set((s) => ({ ...s, cursor: Math.min(s.steps.length - 1, s.cursor + 1) }));
+    if (key.upArrow) move(Math.max(0, cursor - 1));
+    else if (key.downArrow) move(Math.min(steps.length - 1, cursor + 1));
+    else if (key.pageDown) set((s) => ({ ...s, dscroll: s.dscroll + 4 }));
+    else if (key.pageUp) set((s) => ({ ...s, dscroll: Math.max(0, s.dscroll - 4) }));
     else if (input === ' ' && step) {
       patch(cursor, { skipped: !step.skipped });
       set((s) => ({ ...s, warning: '' }));
@@ -51,49 +69,85 @@ export function PlanApproval({ plan, routes, onApprove, onCancel, height }: Plan
     } else if (key.escape) onCancel();
   });
 
-  const { steps, cursor, edit, warning } = get();
+  const { steps, cursor, edit, warning, dscroll } = get();
+  const W = Math.max(20, width - 4); // inside the outer border + padding
+  const DW = Math.max(16, W - 4); // inside the detail box border + padding
+  const summary = wrapText(plan.summary, W);
+  const summaryLines = summary.slice(0, 2);
+  if (summary.length > 2) summaryLines[1] = `${summaryLines[1]!.slice(0, Math.max(0, W - 1))}…`;
+  const { list, detail } = budget(height - 2, summaryLines.length, steps.length, Boolean(warning));
+
   const sel = steps[cursor];
   const selRoute = sel ? routes[sel.id] : undefined;
+
+  // Full, wrapped detail text for the selected step (or the edit buffer), then a window over it.
+  let content: { text: string; style?: 'title' | 'dim' | 'edit' }[] = [];
+  if (sel) {
+    if (edit) {
+      content = wrapText(`Editing ${edit.field}: ${edit.buffer}▏`, DW).map((text) => ({ text, style: 'edit' as const }));
+    } else {
+      content = [
+        ...wrapText(sel.title, DW).map((text) => ({ text, style: 'title' as const })),
+        ...wrapText(sel.instructions, DW).map((text) => ({ text })),
+        ...(selRoute && !sel.tier ? wrapText(`Model: ${selRoute.reason}`, DW).map((text) => ({ text, style: 'dim' as const })) : []),
+        ...(sel.files.length ? wrapText(`Files: ${sel.files.join(', ')}`, DW).map((text) => ({ text, style: 'dim' as const })) : []),
+        ...sel.acceptance.flatMap((a) => wrapText(`✓ ${a}`, DW).map((text) => ({ text, style: 'dim' as const }))),
+      ];
+    }
+  }
+  const editing = Boolean(edit);
+  // While editing show the END of the buffer (where the cursor is); otherwise the scrolled window.
+  const start = editing ? Math.max(0, content.length - detail) : Math.min(dscroll, Math.max(0, content.length - detail));
+  let shown = content.slice(start, start + detail);
+  const hiddenBelow = content.length - (start + shown.length);
+  if (hiddenBelow > 0 && shown.length > 0) shown = [...shown.slice(0, -1), { text: `… ${hiddenBelow + 1} more lines (PgDn)`, style: 'dim' as const }];
+
+  const winStart = Math.max(0, Math.min(cursor - Math.floor(list / 2), steps.length - list));
+  const visible = steps.slice(winStart, winStart + list);
+
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} flexGrow={1} height={height} overflow="hidden">
-      <Text bold color={ACCENT}>Review plan</Text>
-      <Text dimColor wrap="truncate-end">{plan.summary}</Text>
-      <Box flexDirection="column" marginTop={1}>
-        {steps.map((s, i) => {
+    <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1} width={width} height={height} overflow="hidden">
+      <Text wrap="truncate-end">
+        <Text bold color={ACCENT}>Review plan</Text>
+        <Text dimColor>{`  step ${cursor + 1} of ${steps.length}${steps.some((s) => s.skipped) ? ` · ${steps.filter((s) => s.skipped).length} skipped` : ''}`}</Text>
+      </Text>
+      {summaryLines.map((l, i) => <Text key={i} dimColor wrap="truncate-end">{l}</Text>)}
+      <Text> </Text>
+      <Box flexDirection="column" height={list}>
+        {visible.map((s, k) => {
+          const i = winStart + k;
           const route = routes[s.id];
           const tier = s.tier ?? route?.tier;
           const isSel = i === cursor;
           return (
             <Box key={s.id}>
-              <Text color={ACCENT}>{isSel ? '▸ ' : '  '}</Text>
-              <Text dimColor={Boolean(s.skipped)}>{s.skipped ? '[ ] ' : '[x] '}</Text>
-              <Text bold={isSel} dimColor={Boolean(s.skipped)} strikethrough={Boolean(s.skipped)} wrap="truncate-end">{`${i + 1}. ${s.title} `}</Text>
-              {tier && !s.skipped ? <StepBadge tier={tier} /> : null}
-              {s.tier && !s.skipped ? <Text dimColor> (your choice)</Text> : null}
+              <Box flexShrink={0}>
+                <Text color={ACCENT}>{isSel ? '▸ ' : '  '}</Text>
+                <Text dimColor={Boolean(s.skipped)}>{s.skipped ? '[ ] ' : '[x] '}</Text>
+              </Box>
+              <Box flexShrink={1}>
+                <Text bold={isSel} dimColor={Boolean(s.skipped)} strikethrough={Boolean(s.skipped)} wrap="truncate-end">{`${i + 1}. ${s.title}`}</Text>
+              </Box>
+              {tier && !s.skipped ? (
+                <Box flexShrink={0} marginLeft={1}>
+                  <StepBadge tier={tier} />
+                  {s.tier ? <Text dimColor> (yours)</Text> : null}
+                </Box>
+              ) : null}
             </Box>
           );
         })}
       </Box>
-      {sel ? (
-        <Box flexDirection="column" marginTop={1} borderStyle="single" borderColor="gray" paddingX={1}>
-          {edit ? (
-            <Text>
-              <Text color="yellow">{`Editing ${edit.field}: `}</Text>
-              {edit.buffer}
-              <Text inverse> </Text>
-            </Text>
-          ) : (
-            <>
-              <Text wrap="truncate-end">{sel.instructions}</Text>
-              {selRoute && !sel.tier ? <Text dimColor>{`Model: ${selRoute.reason}`}</Text> : null}
-              {sel.files.length ? <Text dimColor wrap="truncate-end">{`Files: ${sel.files.join(', ')}`}</Text> : null}
-              {sel.acceptance.map((a, i) => <Text key={i} dimColor wrap="truncate-end">{`✓ ${a}`}</Text>)}
-            </>
-          )}
-        </Box>
-      ) : null}
-      {warning ? <Text color="yellow">{warning}</Text> : null}
-      <Text dimColor>{edit ? 'Enter save · Esc discard' : '↑↓ select · Space skip · m model · e/i edit · Enter run · Esc cancel'}</Text>
+      <Text> </Text>
+      <Box flexDirection="column" borderStyle="single" borderColor={editing ? 'yellow' : 'gray'} paddingX={1} height={detail + 2}>
+        {shown.map((c, i) => (
+          <Text key={i} wrap="truncate-end" bold={c.style === 'title'} dimColor={c.style === 'dim'} color={c.style === 'edit' ? 'yellow' : undefined}>{c.text}</Text>
+        ))}
+      </Box>
+      {warning ? <Text color="yellow" wrap="truncate-end">{warning}</Text> : null}
+      <Text dimColor wrap="truncate-end">
+        {editing ? 'Enter save · Esc discard' : W >= 72 ? '↑↓ · Space skip · m model · e/i edit · PgUp/Dn · Enter run · Esc cancel' : '↑↓ · Space · m · e/i · Enter run · Esc cancel'}
+      </Text>
     </Box>
   );
 }
