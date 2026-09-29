@@ -219,12 +219,13 @@ export class Pipeline {
       const referenced = resolveMentions(this.cwd, prompt, this.config.limits.maxContextBytes);
       if (referenced.length) emit({ type: 'notice', level: 'info', message: `Using ${referenced.length} referenced file${referenced.length === 1 ? '' : 's'}: ${referenced.map((f) => f.path).join(', ')}` });
       // Greetings skip the git snapshot, classifier and Claude Code session entirely.
-      if (!dryRun && !opts.resume && !opts.noSmallTalk && !referenced.length && isSmallTalk(prompt)) return await this.smallTalk(prompt, summary, { startedAt, memory, at, stage, touched });
+      if (!dryRun && !opts.resume && !opts.noSmallTalk && !referenced.length && isSmallTalk(prompt)) return await this.respond(prompt, summary, { startedAt, memory, at, stage, touched });
       if (!dryRun && !this.cp.available && !this.warnedNoGit) {
         this.warnedNoGit = true;
         emit({ type: 'notice', level: 'info', message: 'Not a git repository, so /undo and /diff are unavailable here. Run `git init` to enable them.' });
       }
-      startTree = dryRun ? null : await this.cp.snapshot();
+      // The git snapshot runs while the classifier and planner think; it is only needed before the first file is touched.
+      const snapshotting = dryRun ? Promise.resolve(null) : this.cp.snapshot().catch(() => null);
       const signal = this.ctl.signal;
 
       const resumed = opts.resume ? this.conv.pending : undefined;
@@ -252,6 +253,11 @@ export class Pipeline {
         emit({ type: 'classified', classification, route: this.routeTask(classification, prompt) });
         if (classification.fallback) emit({ type: 'notice', level: 'warn', message: classification.reason });
         stage('classify', 'done');
+
+        // A pure question the classifier could answer on the spot needs no coding session: one call in total.
+        if (classification.answer && !this.forced && !dryRun) {
+          return await this.respond(prompt, summary, { startedAt, memory, at, stage, touched }, { classification, text: classification.answer });
+        }
 
         // 2. plan
         const wantPlan = !opts.noPlan && (classification.needsPlan || classification.complexity === 'large_build');
@@ -291,6 +297,8 @@ export class Pipeline {
           stage('approve', 'skipped');
         }
       }
+
+      startTree = await snapshotting;
 
       // 4. execute (+ verify per step)
       at('execute');
@@ -333,22 +341,28 @@ export class Pipeline {
 
   // ---- internals --------------------------------------------------------------------------
 
-  /** "hey", "thanks": one short tool-less Haiku call instead of classify + a full Claude Code session. */
-  private async smallTalk(
+  /** Answers without a coding session: small talk (one short Haiku call) or a question the classifier already answered (no extra call). */
+  private async respond(
     prompt: string,
     summary: TaskSummary,
     x: { startedAt: string; memory: string; at: (s: Stage) => void; stage: (s: Stage, st: 'active' | 'done' | 'skipped' | 'failed') => void; touched: string[] },
+    /** The classifier already answered (one call in total): show that answer instead of asking again. */
+    ready?: { classification: Classification; text: string },
   ): Promise<TaskSummary> {
     const emit = this.bus.emit.bind(this.bus);
     const tier: ModelTier = 'haiku';
-    const decision: RouteDecision = { tier, model: this.config.models[tier], reason: 'small talk: no classification, no tools' };
-    const classification: Classification = { complexity: 'trivial', needsPlan: false, reason: 'Small talk.' };
+    const decision: RouteDecision = ready
+      ? { tier, model: this.config.models[this.config.routing.classifier], reason: 'answered by the classifier: no second call' }
+      : { tier, model: this.config.models[tier], reason: 'small talk: no classification, no tools' };
+    const classification: Classification = ready?.classification ?? { complexity: 'trivial', needsPlan: false, reason: 'Small talk.' };
     const plan = singleStepPlan(prompt);
     const step = plan.steps[0]!;
     summary.classification = classification;
     summary.plan = plan;
-    emit({ type: 'classified', classification, route: decision });
-    x.stage('classify', 'skipped');
+    if (!ready) {
+      emit({ type: 'classified', classification, route: decision });
+      x.stage('classify', 'skipped');
+    }
     x.stage('plan', 'skipped');
     x.stage('approve', 'skipped');
     emit({ type: 'plan:ready', plan, routes: { [step.id]: decision } });
@@ -356,15 +370,19 @@ export class Pipeline {
     emit({ type: 'step:start', stepId: step.id, title: 'Reply', route: decision, attempt: 1, at: this.now() });
     const rec: StepRecord = { stepId: step.id, title: 'Reply', model: decision.model, tier, attempts: 1, escalated: false, usage: emptyUsage(), outcome: 'failed' };
     try {
-      const res = await this.run({
-        prompt: x.memory ? `<conversation>\n${x.memory}\n</conversation>\n\n${prompt}` : prompt,
-        model: decision.model, systemPrompt: CHAT_SYSTEM, tools: [], cwd: this.cwd, signal: this.ctl!.signal,
-      });
-      this.lastReply = res.text.trim();
-      rec.usage = res.usage;
-      this.taskUsage = addUsage(this.taskUsage, res.usage);
+      const res = ready
+        ? null
+        : await this.run({
+            prompt: x.memory ? `<conversation>\n${x.memory}\n</conversation>\n\n${prompt}` : prompt,
+            model: decision.model, systemPrompt: CHAT_SYSTEM, tools: [], cwd: this.cwd, signal: this.ctl!.signal,
+          });
+      this.lastReply = (ready?.text ?? res?.text ?? '').trim();
+      if (res) {
+        rec.usage = res.usage;
+        this.taskUsage = addUsage(this.taskUsage, res.usage);
+      }
       emit({ type: 'step:output', stepId: step.id, kind: 'text', text: this.lastReply });
-      emit({ type: 'tokens', stepId: step.id, usage: res.usage, sessionTotal: this.sessionTotal });
+      if (res) emit({ type: 'tokens', stepId: step.id, usage: res.usage, sessionTotal: this.sessionTotal });
       rec.outcome = 'done';
       emit({ type: 'step:done', stepId: step.id, at: this.now() });
     } catch (e) {
@@ -461,8 +479,14 @@ export class Pipeline {
     return this.warm(route({ classification, text, override: this.forced }, this.config));
   }
 
+  /** `hard` sends a lone task to Opus; the steps of a written plan keep their normal route (the plan did the thinking). */
+  private forSteps(plan: Plan, c: Classification): Classification {
+    return plan.steps.length > 1 && c.difficulty === 'hard' ? { ...c, difficulty: 'normal' } : c;
+  }
+
   private routePlan(plan: Plan, classification: Classification): Record<string, RouteDecision> {
-    return Object.fromEntries(plan.steps.map((s) => [s.id, this.routeStep(s, classification)]));
+    const c = this.forSteps(plan, classification);
+    return Object.fromEntries(plan.steps.map((s) => [s.id, this.routeStep(s, c)]));
   }
 
   private routeStep(step: PlanStep, classification: Classification): RouteDecision {
@@ -576,7 +600,8 @@ export class Pipeline {
     const emit = this.bus.emit.bind(this.bus);
     const signal = this.ctl!.signal;
     const perm = resolvePermissionMode(this.permissionMode, this.deps.uid ?? process.getuid?.());
-    const first = this.routeStep(step, classification);
+    const stepClass = this.forSteps(plan, classification);
+    const first = this.routeStep(step, stepClass);
     const rec: StepRecord = { stepId: step.id, title: step.title, model: first.model, tier: first.tier, attempts: 0, escalated: false, usage: emptyUsage(), outcome: 'failed' };
 
     let tier = first.tier;
@@ -596,7 +621,7 @@ export class Pipeline {
       rec.attempts += 1;
       rec.tier = tier;
       rec.model = decision.model;
-      const effort = pickEffort({ tier, complexity: classification.complexity, failuresOnTier, config: this.config });
+      const effort = pickEffort({ tier, complexity: stepClass.complexity, difficulty: stepClass.difficulty, failuresOnTier, config: this.config });
       if (effort) decision = { ...decision, reason: `${decision.reason.replace(/ · effort \w+$/, '')} · effort ${effort}` };
       emit({ type: 'stage', stage: 'verify', status: 'pending' });
       emit({ type: 'step:start', stepId: step.id, title: step.title, route: decision, attempt: rec.attempts, at: this.now() });

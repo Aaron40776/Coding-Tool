@@ -39,6 +39,8 @@ export function route(
   if (kw) return decision(kw.tier, config, `keyword "${kw.match}" → ${kw.tier}`, 'keyword');
   // Unusable classifier output always lands on Sonnet, whatever the complexity map says.
   if (classification.fallback) return decision('sonnet', config, 'classifier output unusable → sonnet', 'fallback');
+  // A task that needs deep reasoning goes to the strongest model (a step of a written plan does not: the plan already did the thinking).
+  if (classification.difficulty === 'hard' && classification.complexity !== 'trivial') return decision('opus', config, `hard ${classification.complexity} → opus`, 'complexity');
   const tier = config.routing[classification.complexity];
   return decision(tier, config, `${classification.complexity} → ${tier}`, 'complexity');
 }

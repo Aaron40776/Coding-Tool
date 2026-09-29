@@ -8,6 +8,10 @@ export interface Classification {
   complexity: Complexity;
   needsPlan: boolean;
   reason: string;
+  /** How much reasoning the task needs, independent of its size. `hard` single tasks go straight to Opus. */
+  difficulty?: 'easy' | 'normal' | 'hard';
+  /** A complete answer to a pure question that needs no project files, tools or current information. */
+  answer?: string;
   /** True when the classifier output was unusable and defaults were applied. */
   fallback?: boolean;
 }

@@ -17,7 +17,7 @@ Requires Node.js 20+ and the [Claude Code CLI](https://docs.claude.com/claude-co
 `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once (or use `npm.cmd`). `smart` finds `claude.exe`, or the npm
 `claude.cmd` shim; set `SMART_CLAUDE_BIN` to point at a specific executable if detection fails.
 
-`smart` is not on the npm registry yet, so install it from a clone (this works on Windows, macOS and Linux):
+Install `smart` from a clone (works on Windows, macOS and Linux):
 
 ```sh
 git clone https://github.com/Aaron40776/Smart.git
@@ -28,7 +28,6 @@ npm link            # puts `smart` on your PATH; then run: smart
 ```
 
 To update later: `git pull`, `npm install`, `npm run build`. To remove: `npm unlink -g @aaron40776/smart`.
-(Once published, `npm install -g @aaron40776/smart` will work too.)
 
 ## Usage
 
@@ -114,7 +113,8 @@ Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prom
 
 ## How it saves tokens (and what it does not)
 
-- A cheap model classifies the task, so trivial questions never reach a big model.
+- A cheap model classifies the task, so trivial questions never reach a big model. A pure question is answered by that same Haiku call (one call, no coding session);
+  a tricky single task (`hard`: deep debugging, concurrency, architecture) goes straight to Opus, while a written plan is made by Opus and executed by Sonnet.
 - Pure small talk ("hey", "thanks") skips even that: one short tool-less Haiku call, a few seconds. Classify, plan and review calls also start Claude Code without hooks,
   plugins, MCP servers or skills (`"runner": { "leanCalls": false }` turns that off), because each of those slows every start-up and tool-less calls cannot use them.
 - The classifier and planner are stateless, tool-free calls that get only a compact memory of earlier tasks, never the full transcript.
