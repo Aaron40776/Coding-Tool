@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SmartEvent } from '../../src/core/events.js';
 import { emptyUsage, type Plan } from '../../src/core/types.js';
 import { parseInput } from '../../src/ui/commands.js';
-import { initialState, reduce, taskUsage } from '../../src/ui/state.js';
+import { initialState, MAX_OUTPUT, reduce, taskUsage } from '../../src/ui/state.js';
 
 const plan: Plan = {
   summary: 's', features: [], fileStructure: [],
@@ -122,11 +122,34 @@ describe('reduce', () => {
     expect(s.stepDuration['s1']).toBe(10_000);
   });
 
+  it('shows review verdicts, the change summary and a coloured diff', () => {
+    const s = apply([
+      { type: 'step:review', stepId: 's1', pass: false, issues: ['game.js: tick() never moves the snake'] },
+      { type: 'step:review', stepId: 's2', pass: true, issues: [] },
+      { type: 'step:review', stepId: 's3', pass: true, issues: [], skipped: 'reviewer down' },
+      { type: 'changes', files: [{ path: 'a.js', status: 'A' }, { path: 'b.js', status: 'M' }, { path: 'c.js', status: 'M' }, { path: 'd.js', status: 'M' }, { path: 'e.js', status: 'D' }], insertions: 12, deletions: 3 },
+      { type: 'diff', text: 'diff --git a/a.js b/a.js\n@@ -1 +1 @@\n-old\n+new\n context\n' },
+    ]);
+    const text = s.output.map((o) => `${o.kind}|${o.text}`);
+    expect(text[0]).toContain('verify-fail|✗ review found problems:');
+    expect(text[0]).toContain('- game.js: tick() never moves the snake');
+    expect(text[1]).toBe('verify-ok|✓ review: acceptance criteria met');
+    expect(text[2]).toBe('info|review skipped (reviewer down)');
+    expect(text[3]).toContain('Changed 5 files (+12 −3): a.js, b.js, c.js, d.js, +1 more. /diff to review, /undo to revert.');
+    expect(text.slice(4)).toEqual(['diff-meta|diff --git a/a.js b/a.js', 'diff-meta|@@ -1 +1 @@', 'diff-del|-old', 'diff-add|+new', 'diff-ctx| context']);
+  });
+
+  it('caps a huge diff', () => {
+    const big = Array.from({ length: 400 }, (_, i) => `+line ${i}`).join('\n');
+    const s = reduce(initialState(), { type: 'diff', text: big });
+    expect(s.output.at(-1)?.text).toBe('… 150 more diff lines');
+  });
+
   it('caps the output log', () => {
     let s = initialState();
-    for (let i = 0; i < 500; i++) s = reduce(s, { type: 'step:output', stepId: 's1', kind: 'text', text: String(i) });
-    expect(s.output).toHaveLength(300);
-    expect(s.output.at(-1)?.text).toBe('499');
+    for (let i = 0; i < MAX_OUTPUT + 200; i++) s = reduce(s, { type: 'step:output', stepId: 's1', kind: 'text', text: String(i) });
+    expect(s.output).toHaveLength(MAX_OUTPUT);
+    expect(s.output.at(-1)?.text).toBe(String(MAX_OUTPUT + 199));
   });
 });
 
@@ -139,6 +162,14 @@ describe('parseInput', () => {
     expect(parseInput('/model auto')).toEqual({ kind: 'model', tier: null });
     expect(parseInput('/quit')).toEqual({ kind: 'quit' });
     expect(parseInput('/new')).toEqual({ kind: 'new' });
+    expect(parseInput('/undo')).toEqual({ kind: 'undo' });
+    expect(parseInput('/diff')).toEqual({ kind: 'diff' });
+    expect(parseInput('/mode')).toEqual({ kind: 'mode', mode: 'show' });
+    expect(parseInput('/mode plan')).toEqual({ kind: 'mode', mode: 'plan' });
+    expect(parseInput('/mode edits')).toEqual({ kind: 'mode', mode: 'acceptEdits' });
+    expect(parseInput('/mode bypass')).toEqual({ kind: 'mode', mode: 'bypassPermissions' });
+    expect(parseInput('/mode auto')).toEqual({ kind: 'mode', mode: null });
+    expect(parseInput('/mode nope')).toMatchObject({ kind: 'error' });
     expect(parseInput('/clear')).toEqual({ kind: 'new' });
   });
   it('rejects unknown input clearly and ignores blanks', () => {

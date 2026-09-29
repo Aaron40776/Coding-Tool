@@ -47,6 +47,9 @@ smart -c                             # continue the previous conversation in thi
 | `/model <haiku\|sonnet\|opus\|auto>` | force a model |
 | `/dry` | toggle dry-run |
 | `/new` | start a fresh conversation (forget earlier tasks) |
+| `/undo` | revert the file changes of the last task (needs git); repeat to step back further |
+| `/diff` | show what the last task changed |
+| `/mode <bypass\|edits\|plan\|auto>` | permission mode; `plan` is read-only |
 
 Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prompts (kept across sessions).
 | `/help`, `/quit`, `Ctrl+C` | help, quit |
@@ -60,6 +63,17 @@ Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prom
 - **Plan checklist:** ticks off as steps finish, with a model badge and the routing reason for each step.
 - **Output:** streamed text and tool calls from Claude Code, verification results, warnings.
 - **Meter:** cost and tokens for this task and for the session.
+
+## Quality and safety
+
+- **Acceptance review.** After each plan step (and after a single-step task when no automated check ran), a cheap model (`routing.reviewer`, default Haiku)
+  checks the plan's acceptance criteria against the files the step changed. Concrete problems go back to the coder as a retry, then escalate like a failing test.
+  So a project **without tests still gets a quality gate**. It fails open (never blocks on a reviewer outage) and is skipped for questions and no-op steps.
+  Turn it off with `"review": { "enabled": false }`.
+- **Checkpoints, `/diff`, `/undo`.** In a git repository, smart snapshots the working tree before and after each step using a private temporary index:
+  your index, branches and history are never touched (only a few unreferenced objects are added, which `git gc` removes). This finds every changed file
+  (including ones made by shell commands), shows a per-task summary (`Changed 3 files (+120 −4)`), and lets you undo a task's changes. Not a git repo? `git init` enables it.
+- **Project-aware planning.** The planner also sees your `CLAUDE.md` / `AGENTS.md` and `package.json` (scripts, dependencies), so plans follow your conventions.
 
 ## How it saves tokens (and what it does not)
 

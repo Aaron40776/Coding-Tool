@@ -8,7 +8,7 @@ export interface TaskMemory {
   complexity?: Complexity;
   /** One-line plan summary, when the task was planned. */
   summary?: string;
-  outcome: 'done' | 'failed' | 'cancelled';
+  outcome: 'done' | 'failed' | 'cancelled' | 'reverted';
   files: string[];
   /** The last thing the model said, trimmed: this is what "the other one" or "that" usually refers to. */
   reply: string;

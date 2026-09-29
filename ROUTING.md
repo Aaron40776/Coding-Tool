@@ -50,6 +50,13 @@ history at full price (I measured $0.18 vs $0.025 for the same follow-up). So fo
 shown says `kept sonnet`. Upgrades, `--model`, your per-step choice on the approval screen and keyword rules always apply, and steps within one plan are always routed on their own merits.
 Set `session.keepWarmTier: false` to disable.
 
+## Review: a quality gate that works without tests
+
+Automated checks (below) only exist when the project has them. So after every plan step, `smart` also asks a cheap reviewer model (`routing.reviewer`,
+default `haiku`) whether the step's **acceptance criteria** are met by the files it changed. Single-step tasks are reviewed only when no check ran.
+The reviewer is told to fail only for concrete, verifiable problems (unmet criterion, syntax error, missing function), never for style. A "fail" feeds
+the same retry-then-escalate loop as a failing test. It costs a few cents per step; set `review.enabled: false` to skip it, or `routing.reviewer: "sonnet"` for a stricter one.
+
 ## Escalation
 
 After a step runs, `smart` runs your checks. If they fail:

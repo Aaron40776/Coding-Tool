@@ -1,5 +1,6 @@
 import type { Classification, ModelTier, Plan, RouteDecision, Usage } from './types.js';
 import type { ErrorKind } from './errors.js';
+import type { FileChange } from './checkpoint.js';
 
 export type Stage = 'classify' | 'plan' | 'approve' | 'execute' | 'verify' | 'done';
 export type StageStatus = 'pending' | 'active' | 'done' | 'skipped' | 'failed';
@@ -16,6 +17,9 @@ export type SmartEvent =
   | { type: 'step:output'; stepId: string; kind: 'text' | 'tool'; text: string }
   | { type: 'tokens'; stepId?: string; usage: Usage; sessionTotal: Usage }
   | { type: 'step:verify'; stepId: string; command: string; ok: boolean; output: string }
+  | { type: 'step:review'; stepId: string; pass: boolean; issues: string[]; skipped?: string }
+  | { type: 'changes'; files: FileChange[]; insertions: number; deletions: number }
+  | { type: 'diff'; text: string }
   | { type: 'step:escalate'; stepId: string; from: ModelTier; to: ModelTier; reason: string }
   | { type: 'step:done'; stepId: string; at?: number }
   | { type: 'step:failed'; stepId: string; error: string; at?: number }

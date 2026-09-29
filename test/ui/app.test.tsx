@@ -79,6 +79,31 @@ describe('App', () => {
     expect(lastFrame()).not.toContain('[chat:');
   });
 
+  it('/mode sets a permission mode, shows it as a tag, and passes it to Claude', async () => {
+    const seen: (string | undefined)[] = [];
+    const executor: RunClaudeFn = async (o) => {
+      seen.push(o.permissionMode);
+      return { isError: false, subtype: 'success', text: 'ok', structured: undefined, usage: emptyUsage(), sessionId: 's', numTurns: 1 };
+    };
+    const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'small_edit', executor })} />);
+    await type(stdin, '/mode plan');
+    await waitFor(() => lastFrame()!.includes('[mode:plan]'));
+    expect(lastFrame()).toContain('read-only');
+    await type(stdin, 'look at the code');
+    await waitFor(() => lastFrame()!.includes('✓ Done'));
+    expect(seen).toEqual(['plan']);
+    await type(stdin, '/mode auto');
+    await waitFor(() => !lastFrame()!.includes('[mode:plan]'));
+  });
+
+  it('/undo and /diff say so when there is no git repository to work with', async () => {
+    const { stdin, lastFrame } = render(<App {...makeApp()} />);
+    await type(stdin, '/undo');
+    await waitFor(() => lastFrame()!.includes('Undo needs a git repository'));
+    await type(stdin, '/diff');
+    await waitFor(() => lastFrame()!.includes('Diff needs a git repository'));
+  });
+
   it('shows startup notices', async () => {
     const { lastFrame } = render(<App {...makeApp()} startupNotices={['Continuing your previous conversation here (2 earlier tasks).']} />);
     await waitFor(() => lastFrame()!.includes('Continuing your previous conversation'));
@@ -125,6 +150,7 @@ describe('App', () => {
     const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'large_build', executor })} />);
     await type(stdin, 'build something big');
     await waitFor(() => lastFrame()!.includes('Review plan'), 4000);
+    await wait(120); // Ink attaches the key listener in an effect just after the first render
     expect(lastFrame()).toContain('1. First');
     stdin.write(KEYS.down);
     await wait();
@@ -143,6 +169,7 @@ describe('App', () => {
     expect(lastFrame()!.split('\n').length).toBeLessThan(rows);
     await type(stdin, 'build something big');
     await waitFor(() => lastFrame()!.includes('Review plan'), 4000);
+    await wait(120); // Ink attaches the key listener in an effect just after the first render
     expect(lastFrame()!.split('\n').length).toBeLessThan(rows);
     stdin.write(KEYS.enter);
     await waitFor(() => lastFrame()!.includes('✓ Done'), 4000);
@@ -153,6 +180,7 @@ describe('App', () => {
     const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'large_build' })} />);
     await type(stdin, 'build something big');
     await waitFor(() => lastFrame()!.includes('Review plan'), 4000);
+    await wait(120); // Ink attaches the key listener in an effect just after the first render
     stdin.write(KEYS.esc);
     await waitFor(() => lastFrame()!.includes('Cancelled.'), 4000);
     expect(lastFrame()).not.toContain('Review plan');

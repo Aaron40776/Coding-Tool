@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.next', '.venv', '__pycache__', 'target']);
@@ -33,4 +33,36 @@ function walk(root: string, rel: string, depth: number, limit: number): string[]
     } else out.push(path);
   }
   return out.slice(0, limit);
+}
+
+const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}\n[truncated]` : s);
+
+/**
+ * What a planner should know about the project that a file list does not say: the project's own
+ * instructions (CLAUDE.md / AGENTS.md) and what `package.json` says about scripts and dependencies.
+ */
+export function projectContext(cwd: string, maxChars = 3500): string {
+  const parts: string[] = [];
+  for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+    const p = join(cwd, name);
+    try {
+      if (existsSync(p)) parts.push(`${name}:\n${clip(readFileSync(p, 'utf8').trim(), 2200)}`);
+    } catch {
+      /* unreadable: skip */
+    }
+  }
+  try {
+    const pkgPath = join(cwd, 'package.json');
+    if (existsSync(pkgPath)) {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { name?: string; type?: string; scripts?: Record<string, string>; dependencies?: object; devDependencies?: object };
+      const bits = [`package.json: name=${pkg.name ?? '?'}${pkg.type ? `, type=${pkg.type}` : ''}`];
+      if (pkg.scripts) bits.push(`scripts: ${Object.keys(pkg.scripts).join(', ')}`);
+      const deps = [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})];
+      if (deps.length) bits.push(`dependencies: ${deps.slice(0, 25).join(', ')}${deps.length > 25 ? ', …' : ''}`);
+      parts.push(bits.join('\n'));
+    }
+  } catch {
+    /* malformed package.json: skip */
+  }
+  return clip(parts.join('\n\n'), maxChars);
 }

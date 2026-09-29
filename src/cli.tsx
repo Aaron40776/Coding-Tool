@@ -6,6 +6,7 @@ import { resolveClaudeCommand, runClaude } from './core/claude.js';
 import { expandHome, loadConfig } from './core/config.js';
 import { EventBus } from './core/events.js';
 import { SmartError } from './core/errors.js';
+import { createCheckpoints } from './core/checkpoint.js';
 import { ConversationStore } from './core/conversation.js';
 import { InputHistory } from './core/inputHistory.js';
 import { Pipeline } from './core/pipeline.js';
@@ -75,7 +76,9 @@ async function main() {
   const startupNotices = opts.continue
     ? [previous ? `Continuing your previous conversation here (${previous.tasks.length} earlier task${previous.tasks.length === 1 ? '' : 's'}).` : 'No previous conversation in this directory; starting a new one.']
     : [];
-  const pipeline = new Pipeline(config, bus, cwd, { run: runClaude, tracker, conversation: previous ?? undefined, conversationStore });
+  const checkpoints = await createCheckpoints(cwd);
+  process.on('exit', () => checkpoints.dispose());
+  const pipeline = new Pipeline(config, bus, cwd, { run: runClaude, tracker, conversation: previous ?? undefined, conversationStore, checkpoints });
 
   let exitCode = 0;
   const altScreen = (on: boolean) => process.stdout.write(on ? '\x1b[?1049h\x1b[H' : '\x1b[?1049l');

@@ -57,6 +57,11 @@ if (schemaRaw) {
 const id = () => 'msg_' + Math.random().toString(36).slice(2, 10);
 const say = async (text) => { out({ type: 'assistant', message: { id: id(), model, content: [{ type: 'text', text }], usage: usage(800, 40) }, session_id: sessionId }); await sleep(delay); };
 const tool = async (name, input) => { out({ type: 'assistant', message: { id: id(), model, content: [{ type: 'tool_use', name, input }], usage: usage(800, 60) }, session_id: sessionId }); await sleep(delay); };
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+mkdirSync('src', { recursive: true });
+const gamePath = 'src/game.js';
+const before = existsSync(gamePath) ? readFileSync(gamePath, 'utf8') : '';
+writeFileSync(gamePath, before + `// change ${new Date().toISOString().slice(11, 19)} ${Math.random().toString(36).slice(2, 6)}\nfunction step() { return 1; }\n`);
 await say('On it. I will read the current files and then make the change.');
 await tool('Read', { file_path: process.cwd() + '/index.html' });
 await tool('Write', { file_path: process.cwd() + '/src/game.js' });

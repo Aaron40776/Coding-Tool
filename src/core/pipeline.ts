@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import type { RunClaudeFn } from './claude.js';
 import { resolvePermissionMode } from './claude.js';
+import { NoCheckpoints, type Changes, type Checkpointer } from './checkpoint.js';
 import { classify } from './classifier.js';
 import type { SmartConfig } from './config.js';
 import { newConversation, recordTask, renderMemory, type Conversation, type ConversationStore } from './conversation.js';
 import { EventBus, type Stage } from './events.js';
 import { SmartError, cancelled, isCancelled } from './errors.js';
-import { projectFiles } from './files.js';
+import { projectContext, projectFiles } from './files.js';
 import { makePlan, singleStepPlan } from './planner.js';
 import { applyWarmCache, route } from './router.js';
-import { runStep } from './runner.js';
+import { reviewStep } from './review.js';
+import { gatherFiles, runStep } from './runner.js';
 import type { StepOutcome, StepRecord, TaskRecord, Tracker } from './tracker.js';
 import { addUsage, emptyUsage, type Classification, type ModelTier, type Plan, type PlanStep, type RouteDecision, type Usage } from './types.js';
 import { detectChecks, nextAttempt, runChecks, type ExecFn } from './verifier.js';
@@ -25,6 +28,10 @@ export interface PipelineDeps {
   /** Conversation to continue (`smart -c`); a new one is started when omitted. */
   conversation?: Conversation;
   conversationStore?: ConversationStore;
+  /** Working-tree snapshots for change summaries, /diff and /undo. Defaults to none. */
+  checkpoints?: Checkpointer;
+  /** Override how project instructions are read for the planner (tests). */
+  projectContext?: (cwd: string) => string;
 }
 
 export interface TaskOptions {
@@ -60,6 +67,12 @@ export class Pipeline {
   private announced = false;
   private conv: Conversation;
   private lastReply = '';
+  private overhead: Usage = emptyUsage();
+  private undoStack: { prompt: string; start: string; end: string }[] = [];
+  private notes: string[] = [];
+  private permOverride: string | null = null;
+  private warnedNoGit = false;
+  private readonly cp: Checkpointer;
 
   constructor(
     private readonly config: SmartConfig,
@@ -68,6 +81,7 @@ export class Pipeline {
     private readonly deps: PipelineDeps,
   ) {
     this.conv = deps.conversation ?? newConversation();
+    this.cp = deps.checkpoints ?? new NoCheckpoints();
   }
 
   // ---- commands from the frontend -------------------------------------------------------
@@ -83,6 +97,13 @@ export class Pipeline {
   }
   get sessionTotal(): Usage {
     return addUsage(this.sessionDone, this.taskUsage);
+  }
+  /** Change the permission mode for the rest of this session (`null` returns to the configured one). */
+  setPermissionMode(mode: string | null): void {
+    this.permOverride = mode;
+  }
+  get permissionMode(): string {
+    return this.permOverride ?? this.config.runner.permissionMode;
   }
   /** Number of tasks remembered in the current conversation. */
   get chatTasks(): number {
@@ -119,8 +140,9 @@ export class Pipeline {
     const taskId = `t_${(this.deps.now?.() ?? new Date()).getTime().toString(36)}`;
     const startedAt = (this.deps.now?.() ?? new Date()).toISOString();
     const summary: TaskSummary = { taskId, ok: false, cancelled: false, dryRun, totals: emptyUsage(), steps: [] };
-    let overhead = emptyUsage();
+    this.overhead = emptyUsage();
     const touched: string[] = [];
+    let startTree: string | null = null;
     this.lastReply = '';
 
     const emit = this.bus.emit.bind(this.bus);
@@ -136,12 +158,16 @@ export class Pipeline {
       this.emitConversation();
       this.announce();
       const memory = renderMemory(this.conv);
+      if (!dryRun && !this.cp.available && !this.warnedNoGit) {
+        this.warnedNoGit = true;
+        emit({ type: 'notice', level: 'info', message: 'Not a git repository, so /undo and /diff are unavailable here. Run `git init` to enable them.' });
+      }
+      startTree = dryRun ? null : await this.cp.snapshot();
       const signal = this.ctl.signal;
 
       // 1. classify
       at('classify');
       const c = await classify(prompt, { config: this.config, cwd: this.cwd, run: this.deps.run, signal, memory });
-      overhead = addUsage(overhead, c.usage);
       this.addCallUsage(c.usage);
       const classification = c.classification;
       summary.classification = classification;
@@ -156,9 +182,8 @@ export class Pipeline {
         at('plan');
         const p = await makePlan(prompt, classification, {
           config: this.config, cwd: this.cwd, run: this.deps.run, signal, override: this.forced, memory,
-          projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd),
+          projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd),
         });
-        overhead = addUsage(overhead, p.usage);
         this.addCallUsage(p.usage);
         plan = p.plan;
         if (p.warning) emit({ type: 'notice', level: 'warn', message: p.warning });
@@ -175,7 +200,7 @@ export class Pipeline {
         stage('execute', 'skipped');
         stage('verify', 'skipped');
         summary.ok = true;
-        return await this.finish(summary, { overhead, startedAt, prompt, touched });
+        return await this.finish(summary, { startedAt, prompt, touched, startTree });
       }
 
       // 3. approve (only for multi-step plans the planner produced)
@@ -191,10 +216,11 @@ export class Pipeline {
 
       // 4. execute (+ verify per step)
       at('execute');
+      const cursor = { tree: startTree };
       const active = plan.steps.filter((s) => !s.skipped);
       let failed = false;
       for (const [index, step] of active.entries()) {
-        const rec = await this.runOneStep({ plan, step, index, total: active.length, classification, touched, current: (s) => at(s) });
+        const rec = await this.runOneStep({ plan, step, index, total: active.length, classification, touched, current: (s) => at(s), prompt, cursor });
         summary.steps.push(rec);
         if (rec.outcome !== 'done') {
           failed = true;
@@ -205,7 +231,7 @@ export class Pipeline {
       for (const s of plan.steps.filter((s) => s.skipped)) summary.steps.push(skippedRecord(s));
       summary.ok = !failed;
       stage('execute', failed ? 'failed' : 'done');
-      return await this.finish(summary, { overhead, startedAt, prompt, touched });
+      return await this.finish(summary, { startedAt, prompt, touched, startTree });
     } catch (e) {
       if (isCancelled(e)) {
         summary.cancelled = true;
@@ -217,7 +243,7 @@ export class Pipeline {
         emit({ type: 'error', kind: err.kind, message: err.message, hint: err.hint });
       }
       summary.ok = false;
-      return await this.finish(summary, { overhead, startedAt, prompt, touched, aborted: true });
+      return await this.finish(summary, { startedAt, prompt, touched, startTree, aborted: true });
     } finally {
       this.running = false;
       this.ctl = null;
@@ -280,8 +306,82 @@ export class Pipeline {
     });
   }
 
+  /** Convert a repository-relative git path to one relative to the project directory, with forward slashes. */
+  private fromRoot(p: string): string {
+    const root = this.cp.root;
+    return root ? path.relative(this.cwd, path.join(root, p)).split(path.sep).join('/') : p;
+  }
+
+  /**
+   * The reviewer is the quality gate that works without tests: every plan step is reviewed, and a single-step
+   * task is reviewed when no automated check ran. Questions, and steps that changed no files, are not.
+   */
+  private shouldReview(c: Classification, planSteps: number, checks: number, files: string[]): boolean {
+    if (!this.config.review.enabled || c.complexity === 'trivial' || files.length === 0) return false;
+    return planSteps > 1 || checks === 0;
+  }
+
+  /** Returns a description of the problems, or undefined when the step passes (or could not be reviewed). */
+  private async review(task: string, step: PlanStep, files: string[], signal: AbortSignal): Promise<string | undefined> {
+    const emit = this.bus.emit.bind(this.bus);
+    const contents = gatherFiles(this.cwd, files, this.config.limits.maxContextBytes);
+    if (contents.length === 0) return undefined;
+    const out = await reviewStep({ task, step, files: contents, config: this.config, cwd: this.cwd, run: this.deps.run, signal });
+    this.addCallUsage(out.usage);
+    if (out.kind === 'unavailable') {
+      emit({ type: 'step:review', stepId: step.id, pass: true, issues: [], skipped: out.reason });
+      return undefined;
+    }
+    emit({ type: 'step:review', stepId: step.id, pass: out.pass, issues: out.issues });
+    return out.pass ? undefined : `A review of your changes found problems with this step:\n${out.issues.map((i) => `- ${i}`).join('\n')}`;
+  }
+
+  /** Snapshot the end state, publish the change summary and remember it for /undo. Returns changed paths (cwd-relative). */
+  private async summarizeChanges(summary: TaskSummary, startTree: string | null, prompt: string): Promise<string[]> {
+    if (summary.dryRun || !startTree) return [];
+    const end = await this.cp.snapshot();
+    if (!end || end === startTree) return [];
+    const ch: Changes | null = await this.cp.changes(startTree, end);
+    if (!ch || ch.files.length === 0) return [];
+    this.undoStack.push({ prompt, start: startTree, end });
+    this.undoStack = this.undoStack.slice(-20);
+    this.bus.emit({ type: 'changes', files: ch.files.map((f) => ({ ...f, path: this.fromRoot(f.path) })), insertions: ch.insertions, deletions: ch.deletions });
+    return ch.files.filter((f) => f.status !== 'D').map((f) => this.fromRoot(f.path));
+  }
+
+  /** Revert the working tree to how it was before the most recent task that changed files. */
+  async undo(): Promise<void> {
+    const emit = this.bus.emit.bind(this.bus);
+    if (this.running) return emit({ type: 'notice', level: 'warn', message: 'Cancel the running task (Esc) before undoing.' });
+    if (!this.cp.available) return emit({ type: 'notice', level: 'warn', message: 'Undo needs a git repository. Run `git init` in this directory first.' });
+    const entry = this.undoStack.pop();
+    if (!entry) return emit({ type: 'notice', level: 'info', message: 'Nothing to undo.' });
+    const now = await this.cp.snapshot();
+    const r = now ? await this.cp.restore(entry.start, now) : null;
+    if (!r) {
+      this.undoStack.push(entry);
+      return emit({ type: 'notice', level: 'warn', message: 'Could not restore the previous state.' });
+    }
+    const last = [...this.conv.tasks].reverse().find((t) => t.outcome !== 'reverted');
+    if (last) last.outcome = 'reverted';
+    this.notes.push('The user undid all of your changes from the previous task; the files are back to how they were before it. Do not assume that work exists.');
+    this.saveConversation();
+    emit({ type: 'notice', level: 'info', message: `Undid "${entry.prompt.length > 50 ? `${entry.prompt.slice(0, 49)}…` : entry.prompt}": restored ${r.restored} and removed ${r.removed} file${r.restored + r.removed === 1 ? '' : 's'}.` });
+  }
+
+  /** Publish a unified diff of the most recent task that changed files. */
+  async diff(): Promise<void> {
+    const emit = this.bus.emit.bind(this.bus);
+    if (!this.cp.available) return emit({ type: 'notice', level: 'warn', message: 'Diff needs a git repository. Run `git init` in this directory first.' });
+    const entry = this.undoStack.at(-1);
+    if (!entry) return emit({ type: 'notice', level: 'info', message: 'No changes to show yet.' });
+    const text = await this.cp.diff(entry.start, entry.end);
+    emit(text ? { type: 'diff', text } : { type: 'notice', level: 'warn', message: 'Could not compute the diff.' });
+  }
+
   private addCallUsage(usage: Usage): void {
     this.taskUsage = addUsage(this.taskUsage, usage);
+    this.overhead = addUsage(this.overhead, usage);
     this.bus.emit({ type: 'tokens', usage, sessionTotal: this.sessionTotal });
   }
 
@@ -293,11 +393,16 @@ export class Pipeline {
     classification: Classification;
     touched: string[];
     current: (s: Stage) => void;
+    /** The user's overall request (for the reviewer). */
+    prompt: string;
+    /** Working-tree snapshot before this step; updated to the snapshot after it. */
+    cursor: { tree: string | null };
   }): Promise<StepRecord> {
     const { plan, step, index, total, classification, touched } = a;
+    const stepStart = a.cursor.tree;
     const emit = this.bus.emit.bind(this.bus);
     const signal = this.ctl!.signal;
-    const perm = resolvePermissionMode(this.config.runner.permissionMode, this.deps.uid ?? process.getuid?.());
+    const perm = resolvePermissionMode(this.permissionMode, this.deps.uid ?? process.getuid?.());
     const first = this.routeStep(step, classification);
     const rec: StepRecord = { stepId: step.id, title: step.title, model: first.model, tier: first.tier, attempts: 0, escalated: false, usage: emptyUsage(), outcome: 'failed' };
 
@@ -326,11 +431,12 @@ export class Pipeline {
       const resuming = this.config.session.resume && this.conv.sessionId !== null;
       const sessionId = this.config.session.resume ? (this.conv.sessionId ?? randomUUID()) : undefined;
       const memory = !resuming && index === 0 ? renderMemory(this.conv) : '';
+      const note = index === 0 ? this.notes.join(' ') : '';
 
       let ok = false;
       try {
         const res = await runStep({
-          plan, step, index, total, touchedFiles: touched, failure, memory: memory || undefined,
+          plan, step, index, total, touchedFiles: touched, failure, memory: memory || undefined, note: note || undefined,
           session: sessionId ? { id: sessionId, resume: resuming } : undefined,
           effort: this.config.runner.effort[tier],
           config: this.config, cwd: this.cwd, run: this.deps.run, route: decision, permissionMode: perm.mode, signal,
@@ -348,14 +454,21 @@ export class Pipeline {
         rec.usage = addUsage(rec.usage, res.usage);
         this.taskUsage = addUsage(this.taskUsage, res.usage);
         emit({ type: 'tokens', stepId: step.id, usage: res.usage, sessionTotal: this.sessionTotal });
-        for (const f of res.touched) if (!touched.includes(f)) touched.push(f);
+        if (note) this.notes = [];
+        // What actually changed on disk (catches files made by shell commands), plus what the tool events reported.
+        const after = await this.cp.snapshot();
+        const stepChanges = stepStart && after ? await this.cp.changes(stepStart, after) : null;
+        const changedNow = stepChanges ? stepChanges.files.filter((f) => f.status !== 'D').map((f) => this.fromRoot(f.path)) : [];
+        const stepFiles = [...new Set([...changedNow, ...res.touched])];
+        for (const f of stepFiles) if (!touched.includes(f)) touched.push(f);
+        if (after) a.cursor.tree = after;
         if (sessionId) this.conv.sessionId = sessionId;
         this.conv.lastTier = tier;
         this.conv.lastCallAt = this.now();
         this.conv.lastCallAtByTier = { ...this.conv.lastCallAtByTier, [tier]: this.conv.lastCallAt };
 
         // verify
-        const skipVerify = classification.complexity === 'trivial' && res.touched.length === 0;
+        const skipVerify = classification.complexity === 'trivial' && stepFiles.length === 0;
         const checks = skipVerify ? [] : detectChecks(this.cwd, this.config);
         if (checks.length > 0) a.current('verify');
         const v = await runChecks(checks, {
@@ -363,10 +476,18 @@ export class Pipeline {
           onCheck: (r) => emit({ type: 'step:verify', stepId: step.id, ...r }),
         });
         if (signal.aborted) throw cancelled();
-        emit({ type: 'stage', stage: 'verify', status: checks.length === 0 ? 'skipped' : v.ok ? 'done' : 'failed' });
+        // This attempt's own problem (`failure` still holds the previous attempt's text, which was already sent to the model).
+        let problem: string | undefined = v.ok ? undefined : `${v.failure?.command} failed:\n${v.failure?.output}`;
+        let reviewed = false;
+        if (v.ok && this.shouldReview(classification, plan.steps.length, checks.length, stepFiles)) {
+          a.current('verify');
+          problem = await this.review(a.prompt, step, stepFiles, signal);
+          reviewed = true;
+        }
+        emit({ type: 'stage', stage: 'verify', status: checks.length === 0 && !reviewed ? 'skipped' : problem ? 'failed' : 'done' });
         a.current('execute');
-        if (v.ok) ok = true;
-        else failure = `${v.failure?.command} failed:\n${v.failure?.output}`;
+        if (problem) failure = problem;
+        else ok = true;
       } catch (e) {
         if (isCancelled(e)) {
           rec.outcome = 'cancelled';
@@ -411,16 +532,18 @@ export class Pipeline {
 
   private async finish(
     summary: TaskSummary,
-    f: { overhead: Usage; startedAt: string; prompt: string; touched: string[]; aborted?: boolean },
+    f: { startedAt: string; prompt: string; touched: string[]; startTree: string | null; aborted?: boolean },
   ): Promise<TaskSummary> {
-    const { overhead, startedAt, prompt, aborted = false } = f;
+    const { startedAt, prompt, aborted = false } = f;
+    const overhead = this.overhead;
+    const changed = await this.summarizeChanges(summary, f.startTree, prompt);
     if (!summary.dryRun && summary.steps.some((s) => s.outcome !== 'skipped')) {
       recordTask(this.conv, {
         prompt,
         complexity: summary.classification?.complexity,
         summary: summary.plan && summary.plan.steps.length > 1 ? summary.plan.summary : undefined,
         outcome: summary.cancelled ? 'cancelled' : summary.ok ? 'done' : 'failed',
-        files: f.touched,
+        files: changed.length > 0 ? changed : f.touched,
         reply: this.lastReply,
         at: startedAt,
       });

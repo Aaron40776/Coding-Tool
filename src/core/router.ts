@@ -44,7 +44,7 @@ export function route(
 }
 
 /** Route for the fixed roles that are not driven by task complexity. */
-export function routeRole(role: 'planner' | 'classifier', config: SmartConfig, override?: ModelTier | null): RouteDecision {
+export function routeRole(role: 'planner' | 'classifier' | 'reviewer', config: SmartConfig, override?: ModelTier | null): RouteDecision {
   const tier = config.routing[role];
   return override && role === 'planner' ? decision(override, config, `forced to ${override}`) : decision(tier, config, `${role} role → ${tier}`);
 }

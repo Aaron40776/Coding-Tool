@@ -8,7 +8,7 @@ export type Phase = 'idle' | 'running' | 'approval' | 'finished';
 
 export interface OutputLine {
   id: number;
-  kind: 'text' | 'tool' | 'info' | 'warn' | 'error' | 'verify-ok' | 'verify-fail' | 'user';
+  kind: 'text' | 'tool' | 'info' | 'warn' | 'error' | 'verify-ok' | 'verify-fail' | 'user' | 'diff-add' | 'diff-del' | 'diff-meta' | 'diff-ctx';
   text: string;
   stepId?: string;
 }
@@ -40,7 +40,7 @@ export interface UiState {
   nextId: number;
 }
 
-const MAX_OUTPUT = 300;
+export const MAX_OUTPUT = 800;
 
 export const initialStages = (): Record<Stage, StageStatus> => ({
   classify: 'pending', plan: 'pending', approve: 'pending', execute: 'pending', verify: 'pending', done: 'pending',
@@ -125,6 +125,24 @@ export function reduce(s: UiState, e: UiAction): UiState {
       return { ...s, session: e.sessionTotal };
     case 'step:verify':
       return push({ ...s, stepStatus: { ...s.stepStatus, [e.stepId]: 'verifying' } }, e.ok ? 'verify-ok' : 'verify-fail', e.ok ? `✓ ${e.command}` : `✗ ${e.command}\n${e.output}`, e.stepId);
+    case 'step:review':
+      return e.skipped
+        ? push(s, 'info', `review skipped (${e.skipped})`, e.stepId)
+        : push(s, e.pass ? 'verify-ok' : 'verify-fail', e.pass ? '✓ review: acceptance criteria met' : `✗ review found problems:\n${e.issues.map((i) => `  - ${i}`).join('\n')}`, e.stepId);
+    case 'changes': {
+      const shown = e.files.slice(0, 4).map((f) => f.path).join(', ');
+      const more = e.files.length > 4 ? `, +${e.files.length - 4} more` : '';
+      return push(s, 'info', `Changed ${e.files.length} file${e.files.length === 1 ? '' : 's'} (+${e.insertions} −${e.deletions}): ${shown}${more}. /diff to review, /undo to revert.`);
+    }
+    case 'diff': {
+      const lines = e.text.split('\n').filter((l, i, a) => l !== '' || i < a.length - 1);
+      let next = s;
+      for (const l of lines.slice(0, 250)) {
+        const kind = l.startsWith('+++') || l.startsWith('---') || l.startsWith('diff ') || l.startsWith('index ') || l.startsWith('@@') ? 'diff-meta' : l.startsWith('+') ? 'diff-add' : l.startsWith('-') ? 'diff-del' : 'diff-ctx';
+        next = push(next, kind, l);
+      }
+      return lines.length > 250 ? push(next, 'info', `… ${lines.length - 250} more diff lines`) : next;
+    }
     case 'step:escalate':
       return push({ ...s, escalatedTo: { ...s.escalatedTo, [e.stepId]: e.to } }, 'warn', `↑ Escalating ${e.from} → ${e.to} (${e.reason})`, e.stepId);
     case 'step:done':

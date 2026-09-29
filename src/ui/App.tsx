@@ -6,7 +6,7 @@ import type { Pipeline } from '../core/pipeline.js';
 import type { Tracker } from '../core/tracker.js';
 import type { ModelTier } from '../core/types.js';
 import type { InputHistory } from '../core/inputHistory.js';
-import { COMMANDS, HELP_TEXT, matchCommands, parseInput } from './commands.js';
+import { COMMANDS, HELP_TEXT, matchCommands, modeLabel, parseInput } from './commands.js';
 import { CostMeter } from './components/CostMeter.js';
 import { InputBox } from './components/InputBox.js';
 import { OutputLog } from './components/OutputLog.js';
@@ -62,6 +62,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
   const [view, setView] = useState<'main' | 'stats'>('main');
   const [dryRun, setDryRun] = useState(initial?.dryRun ?? false);
   const [forced, setForced] = useState<ModelTier | null>(initial?.model ?? null);
+  const [mode, setMode] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
   const [scroll, setScroll] = useState(0);
   const [draft, setDraft] = useState('');
@@ -159,6 +160,17 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
         if (pipeline.isRunning) return dispatch({ type: 'notice', level: 'warn', message: 'Cancel the running task (Esc) before starting a new conversation.' });
         pipeline.newConversation();
         return dispatch({ type: 'ui:info', text: 'Started a new conversation. Earlier tasks are forgotten.' });
+      case 'undo':
+        void pipeline.undo();
+        return;
+      case 'diff':
+        void pipeline.diff();
+        return;
+      case 'mode':
+        if (cmd.mode === 'show') return dispatch({ type: 'ui:info', text: `Permission mode: ${pipeline.permissionMode}${mode ? ' (set with /mode)' : ' (from config)'}.` });
+        setMode(cmd.mode);
+        pipeline.setPermissionMode(cmd.mode);
+        return dispatch({ type: 'ui:info', text: cmd.mode ? `Permission mode set to ${cmd.mode}${cmd.mode === 'plan' ? ' (read-only: Claude will not edit files).' : '.'}` : `Permission mode back to the configured default (${pipeline.permissionMode}).` });
       case 'dry':
         setDryRun(!dryRun);
         return dispatch({ type: 'ui:info', text: `Dry-run ${!dryRun ? 'on: tasks will classify and plan only.' : 'off.'}` });
@@ -172,7 +184,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
 
   // header 1 + pipeline 1 + input 3 + hint 1 = 6, plus one spare row: Ink clears the screen when output fills every row.
   const mainHeight = Math.max(6, size.rows - 7);
-  const tags = [dryRun ? 'dry-run' : '', forced ? `model:${forced}` : 'model:auto', state.chatTasks > 0 ? `chat:${state.chatTasks}` : ''].filter(Boolean);
+  const tags = [dryRun ? 'dry-run' : '', mode ? `mode:${modeLabel(mode)}` : '', forced ? `model:${forced}` : 'model:auto', state.chatTasks > 0 ? `chat:${state.chatTasks}` : ''].filter(Boolean);
   const suggestions = matchCommands(draft);
   const hint =
     state.phase === 'approval'

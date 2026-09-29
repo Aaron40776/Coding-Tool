@@ -21,3 +21,26 @@ describe('projectFiles (non-git fallback)', () => {
     expect(projectFiles('/definitely/not/here')).toEqual([]);
   });
 });
+
+import { projectContext } from '../../src/core/files.js';
+
+describe('projectContext', () => {
+  it('includes CLAUDE.md and a package.json summary', () => {
+    const d = mkdtempSync(join(tmpdir(), 'smart-ctx-'));
+    writeFileSync(join(d, 'CLAUDE.md'), '# Rules\nAlways use tabs.');
+    writeFileSync(join(d, 'package.json'), JSON.stringify({ name: 'demo', type: 'module', scripts: { test: 'vitest', build: 'tsup' }, dependencies: { react: '1' }, devDependencies: { vitest: '1' } }));
+    const c = projectContext(d);
+    expect(c).toContain('Always use tabs.');
+    expect(c).toContain('name=demo, type=module');
+    expect(c).toContain('scripts: test, build');
+    expect(c).toContain('dependencies: react, vitest');
+  });
+  it('is empty for a bare directory, tolerates bad JSON, and is size-capped', () => {
+    const d = mkdtempSync(join(tmpdir(), 'smart-ctx-'));
+    expect(projectContext(d)).toBe('');
+    writeFileSync(join(d, 'package.json'), '{oops');
+    expect(projectContext(d)).toBe('');
+    writeFileSync(join(d, 'CLAUDE.md'), 'x'.repeat(10_000));
+    expect(projectContext(d, 500).length).toBeLessThanOrEqual(520);
+  });
+});

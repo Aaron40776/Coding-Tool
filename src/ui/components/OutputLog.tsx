@@ -60,7 +60,7 @@ export function wrapText(text: string, width: number): string[] {
 export function toRows(lines: OutputLine[], width = 0): Row[] {
   return lines.flatMap((l) => {
     // Tool lines stay on one row (paths); everything else is wrapped so reasons and errors stay readable.
-    const wrapped = l.kind === 'tool' || width === 0 ? l.text.split('\n') : l.text.split('\n').flatMap((p) => wrapText(p, width));
+    const wrapped = l.kind === 'tool' || l.kind.startsWith('diff') || width === 0 ? l.text.split('\n') : l.text.split('\n').flatMap((p) => wrapText(p, width));
     const parts = wrapped;
     const shown = parts.length > MAX_LINES_PER_ENTRY ? [...parts.slice(0, MAX_LINES_PER_ENTRY), `… ${parts.length - MAX_LINES_PER_ENTRY} more lines`] : parts;
     return shown.map((text, i) => ({ key: `${l.id}:${i}`, kind: l.kind, text, first: i === 0 }));
@@ -91,6 +91,14 @@ function RowView({ row }: { row: Row }) {
       return <Text color="green" wrap="truncate-end">{`  ${t}`}</Text>;
     case 'verify-fail':
       return <Text color="red" wrap="truncate-end">{`  ${t}`}</Text>;
+    case 'diff-add':
+      return <Text color="green" wrap="truncate-end">{`  ${t}`}</Text>;
+    case 'diff-del':
+      return <Text color="red" wrap="truncate-end">{`  ${t}`}</Text>;
+    case 'diff-ctx':
+      return <Text dimColor wrap="truncate-end">{`  ${t}`}</Text>;
+    case 'diff-meta':
+      return <Text color="cyan" dimColor wrap="truncate-end">{`  ${t}`}</Text>;
     default:
       return <Text dimColor wrap="truncate-end">{row.first ? `· ${t}` : `  ${t}`}</Text>;
   }

@@ -63,12 +63,15 @@ export interface StepPromptInput {
   failure?: string;
   /** Conversation memory to include when the coding session cannot be resumed (new, lost, or resume disabled). */
   memory?: string;
+  /** One-off notices for the model, e.g. that the user undid its previous changes. */
+  note?: string;
 }
 
 /** The lean per-step prompt: the step, its acceptance criteria and only the relevant files. No history. */
 export function buildStepPrompt(i: StepPromptInput): string {
   const parts: string[] = [];
   const multi = i.total > 1;
+  if (i.note) parts.push(`Note: ${i.note}`);
   if (i.memory) parts.push(`Context from earlier in this conversation (for reference):\n${i.memory}`);
   if (multi) {
     parts.push(`You are executing step ${i.index + 1} of ${i.total} of a plan. Do only this step.`);
