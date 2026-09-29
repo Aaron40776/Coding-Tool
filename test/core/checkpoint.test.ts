@@ -128,3 +128,28 @@ describe('GitCheckpoints', () => {
     expect(ch.files).toEqual([{ path: 'pkg/x.txt', status: 'A' }]);
   });
 });
+
+describe('GitCheckpoints: project directory position', () => {
+  it('reports where the project directory sits inside the repository', async () => {
+    const d = repo();
+    mkdirSync(join(d, 'pkg', 'inner'), { recursive: true });
+    expect((await cp(d)).prefix).toBe('');
+    expect((await cp(join(d, 'pkg'))).prefix).toBe('pkg');
+    expect((await cp(join(d, 'pkg', 'inner'))).prefix).toBe('pkg/inner');
+  });
+  it('prunes only the empty parent directories of removed files', async () => {
+    const d = repo();
+    mkdirSync(join(d, 'keepdir'), { recursive: true });
+    writeFileSync(join(d, 'keepdir', 'stays.txt'), 's');
+    const c = await cp(d);
+    const start = (await c.snapshot())!;
+    mkdirSync(join(d, 'a', 'b', 'c'), { recursive: true });
+    writeFileSync(join(d, 'a', 'b', 'c', 'x.txt'), 'x');
+    writeFileSync(join(d, 'a', 'y.txt'), 'y');
+    writeFileSync(join(d, 'keepdir', 'new.txt'), 'n');
+    await c.restore(start, (await c.snapshot())!);
+    expect(existsSync(join(d, 'a'))).toBe(false);
+    expect(existsSync(join(d, 'keepdir', 'stays.txt'))).toBe(true);
+    expect(existsSync(join(d, 'keepdir', 'new.txt'))).toBe(false);
+  });
+});

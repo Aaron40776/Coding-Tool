@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 export interface FileChange {
   path: string;
@@ -24,6 +24,12 @@ export interface Checkpointer {
   readonly available: boolean;
   /** Absolute path of the repository root (git paths are relative to it). */
   readonly root: string;
+  /**
+   * Where the project directory sits inside the repository, as a posix path relative to the root ('' at the top).
+   * Use this, not path arithmetic between `root` and the project directory: on Windows the two can be spelled
+   * differently (8.3 short names, casing, junctions) and a computed relative path comes out wrong.
+   */
+  readonly prefix: string;
   snapshot(): Promise<string | null>;
   changes(from: string, to: string): Promise<Changes | null>;
   diff(from: string, to: string): Promise<string | null>;
@@ -62,6 +68,7 @@ function git(args: string[], opts: { cwd: string; env?: Record<string, string>; 
 export class GitCheckpoints implements Checkpointer {
   available = false;
   root = '';
+  prefix = '';
   private gitDir = '';
   private tmp = '';
   private cacheIndex = '';
@@ -77,6 +84,8 @@ export class GitCheckpoints implements Checkpointer {
     if (dir.code !== 0) return false;
     this.root = top.stdout.trim();
     this.gitDir = dir.stdout.trim();
+    const pre = await git(['rev-parse', '--show-prefix'], { cwd: this.cwd, timeoutMs: 10_000 });
+    this.prefix = pre.code === 0 ? pre.stdout.trim().replace(/\/+$/, '') : '';
     try {
       this.tmp = mkdtempSync(join(tmpdir(), 'smart-ckpt-'));
     } catch {
@@ -157,11 +166,10 @@ export class GitCheckpoints implements Checkpointer {
     }
     let removed = 0;
     for (const rel of toRemove) {
-      const abs = join(this.root, rel);
       try {
-        unlinkSync(abs);
+        unlinkSync(join(this.root, rel));
         removed += 1;
-        pruneEmptyDirs(dirname(abs), this.root);
+        pruneEmptyDirs(this.root, rel);
       } catch {
         /* already gone */
       }
@@ -175,16 +183,17 @@ export class GitCheckpoints implements Checkpointer {
   }
 }
 
-function pruneEmptyDirs(dir: string, root: string): void {
-  let d = dir;
-  while (d.length > root.length && d.startsWith(root)) {
+/** Remove now-empty parent directories of `rel` (a repo-relative posix path), innermost first, never above the root. */
+function pruneEmptyDirs(root: string, rel: string): void {
+  const parts = rel.split('/').slice(0, -1);
+  for (let n = parts.length; n > 0; n--) {
+    const dir = join(root, ...parts.slice(0, n));
     try {
-      if (readdirSync(d).length > 0) return;
-      rmdirSync(d);
+      if (readdirSync(dir).length > 0) return;
+      rmdirSync(dir);
     } catch {
       return;
     }
-    d = dirname(d);
   }
 }
 
@@ -192,6 +201,7 @@ function pruneEmptyDirs(dir: string, root: string): void {
 export class NoCheckpoints implements Checkpointer {
   readonly available = false;
   readonly root = '';
+  readonly prefix = '';
   snapshot = async () => null;
   changes = async () => null;
   diff = async () => null;

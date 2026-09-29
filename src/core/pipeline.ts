@@ -372,10 +372,9 @@ export class Pipeline {
     });
   }
 
-  /** Convert a repository-relative git path to one relative to the project directory, with forward slashes. */
+  /** Convert a repository-relative git path to one relative to the project directory (posix separators). */
   private fromRoot(p: string): string {
-    const root = this.cp.root;
-    return root ? path.relative(this.cwd, path.join(root, p)).split(path.sep).join('/') : p;
+    return path.posix.relative(this.cp.prefix, p);
   }
 
   /**
