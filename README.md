@@ -1,6 +1,6 @@
 # Smart
 
-[![CI](https://github.com/Aaron40776/Coding-Tool/actions/workflows/ci.yml/badge.svg)](https://github.com/Aaron40776/Coding-Tool/actions/workflows/ci.yml)
+[![CI](https://github.com/Aaron40776/Smart/actions/workflows/ci.yml/badge.svg)](https://github.com/Aaron40776/Smart/actions/workflows/ci.yml)
 
 **Claude Code, routed to the cheapest model that can do each step well.**
 
@@ -20,8 +20,8 @@ Requires Node.js 20+ and the [Claude Code CLI](https://docs.claude.com/claude-co
 `smart` is not on the npm registry yet, so install it from a clone (this works on Windows, macOS and Linux):
 
 ```sh
-git clone https://github.com/Aaron40776/Coding-Tool.git
-cd Coding-Tool
+git clone https://github.com/Aaron40776/Smart.git
+cd Smart
 npm install
 npm run build
 npm link            # puts `smart` on your PATH; then run: smart

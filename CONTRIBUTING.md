@@ -4,8 +4,8 @@ Thanks for helping make `smart` better.
 
 ## Setup
 ```sh
-git clone https://github.com/Aaron40776/Coding-Tool.git
-cd Coding-Tool
+git clone https://github.com/Aaron40776/Smart.git
+cd Smart
 npm install
 npm run check      # lint + typecheck + tests + build
 npm run dev        # run from source (needs the `claude` CLI, logged in)

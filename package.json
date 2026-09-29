@@ -29,7 +29,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Aaron40776/Coding-Tool.git"
+    "url": "git+https://github.com/Aaron40776/Smart.git"
   },
   "scripts": {
     "build": "tsup",
@@ -62,8 +62,8 @@
   "publishConfig": {
     "access": "public"
   },
-  "homepage": "https://github.com/Aaron40776/Coding-Tool#readme",
+  "homepage": "https://github.com/Aaron40776/Smart#readme",
   "bugs": {
-    "url": "https://github.com/Aaron40776/Coding-Tool/issues"
+    "url": "https://github.com/Aaron40776/Smart/issues"
   }
 }
