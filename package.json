@@ -1,0 +1,68 @@
+{
+  "name": "@aaron40776/smart",
+  "version": "0.2.0",
+  "description": "Interactive TUI that wraps Claude Code to maximize result quality while minimizing token usage",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "smart": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "ROUTING.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "smart.config.example.json"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cli",
+    "tui",
+    "ink",
+    "llm",
+    "cost"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Aaron40776/Coding-Tool.git"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/cli.tsx",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "prepublishOnly": "npm run check"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "ink": "^6.8.0",
+    "react": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "eslint": "^10.11.0",
+    "ink-testing-library": "^4.0.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^5.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/Aaron40776/Coding-Tool#readme",
+  "bugs": {
+    "url": "https://github.com/Aaron40776/Coding-Tool/issues"
+  }
+}

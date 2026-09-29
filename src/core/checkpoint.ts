@@ -1,0 +1,221 @@
+import { execFile } from 'node:child_process';
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+export interface FileChange {
+  path: string;
+  /** Added, Modified or Deleted, relative to the earlier snapshot. */
+  status: 'A' | 'M' | 'D';
+}
+
+export interface Changes {
+  files: FileChange[];
+  insertions: number;
+  deletions: number;
+}
+
+/**
+ * Snapshots of the working tree, used to see what a step changed and to undo a task.
+ * Every method degrades to null instead of throwing: checkpoints are a convenience, never a blocker.
+ */
+export interface Checkpointer {
+  /** False when the directory is not a git repository (or git is missing). */
+  readonly available: boolean;
+  /** Absolute path of the repository root (git paths are relative to it). */
+  readonly root: string;
+  /**
+   * Where the project directory sits inside the repository, as a posix path relative to the root ('' at the top).
+   * Use this, not path arithmetic between `root` and the project directory: on Windows the two can be spelled
+   * differently (8.3 short names, casing, junctions) and a computed relative path comes out wrong.
+   */
+  readonly prefix: string;
+  snapshot(): Promise<string | null>;
+  changes(from: string, to: string): Promise<Changes | null>;
+  diff(from: string, to: string): Promise<string | null>;
+  /** Make the working tree match `target` again (only files that differ from `current` are touched). */
+  restore(target: string, current: string): Promise<{ restored: number; removed: number } | null>;
+  dispose(): void;
+}
+
+interface GitResult {
+  code: number;
+  stdout: string;
+}
+
+const TIMEOUT_MS = 60_000;
+
+function git(args: string[], opts: { cwd: string; env?: Record<string, string>; input?: string; timeoutMs?: number }): Promise<GitResult> {
+  return new Promise((resolve) => {
+    const child = execFile(
+      'git',
+      args,
+      { cwd: opts.cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', ...opts.env }, maxBuffer: 64 * 1024 * 1024, timeout: opts.timeoutMs ?? TIMEOUT_MS, encoding: 'utf8', windowsHide: true },
+      (err, stdout) => {
+        const code = err ? (typeof (err as NodeJS.ErrnoException & { code?: unknown }).code === 'number' ? ((err as unknown as { code: number }).code) : 1) : 0;
+        resolve({ code, stdout: stdout ?? '' });
+      },
+    );
+    child.stdin?.on('error', () => undefined);
+    child.stdin?.end(opts.input ?? '');
+  });
+}
+
+/**
+ * Checkpoints as git tree objects built from a private temporary index, so the user's index, branches and
+ * history are never touched (the only trace is a few unreferenced objects that `git gc` cleans up).
+ */
+export class GitCheckpoints implements Checkpointer {
+  available = false;
+  root = '';
+  prefix = '';
+  private gitDir = '';
+  private tmp = '';
+  private cacheIndex = '';
+  private seeded = false;
+
+  constructor(private readonly cwd: string) {}
+
+  /** Detect the repository. Call once before use; resolves to `available`. */
+  async init(): Promise<boolean> {
+    const top = await git(['rev-parse', '--show-toplevel'], { cwd: this.cwd, timeoutMs: 10_000 });
+    if (top.code !== 0 || !top.stdout.trim()) return false;
+    const dir = await git(['rev-parse', '--absolute-git-dir'], { cwd: this.cwd, timeoutMs: 10_000 });
+    if (dir.code !== 0) return false;
+    this.root = top.stdout.trim();
+    this.gitDir = dir.stdout.trim();
+    const pre = await git(['rev-parse', '--show-prefix'], { cwd: this.cwd, timeoutMs: 10_000 });
+    this.prefix = pre.code === 0 ? pre.stdout.trim().replace(/\/+$/, '') : '';
+    try {
+      this.tmp = mkdtempSync(join(tmpdir(), 'smart-ckpt-'));
+    } catch {
+      return false;
+    }
+    this.cacheIndex = join(this.tmp, 'index');
+    this.available = true;
+    return true;
+  }
+
+  async snapshot(): Promise<string | null> {
+    if (!this.available) return null;
+    // Seed the private index from the real one once, so unchanged files are recognised by stat and not re-hashed.
+    if (!this.seeded) {
+      this.seeded = true;
+      const real = join(this.gitDir, 'index');
+      try {
+        // assume-unchanged / skip-worktree entries would keep stale content in a seeded index, so then start empty.
+        const flags = await git(['ls-files', '-v'], { cwd: this.root, timeoutMs: 15_000 });
+        const stale = flags.code === 0 && /^[hsS] /m.test(flags.stdout);
+        if (!stale && existsSync(real)) copyFileSync(real, this.cacheIndex);
+      } catch {
+        /* start from an empty index */
+      }
+    }
+    const env = { GIT_INDEX_FILE: this.cacheIndex };
+    const add = await git(['add', '-A', '--', '.'], { cwd: this.root, env });
+    if (add.code !== 0) return null;
+    const tree = await git(['write-tree'], { cwd: this.root, env });
+    return tree.code === 0 && /^[0-9a-f]{40,64}$/.test(tree.stdout.trim()) ? tree.stdout.trim() : null;
+  }
+
+  async changes(from: string, to: string): Promise<Changes | null> {
+    if (!this.available) return null;
+    const names = await git(['diff-tree', '-r', '--no-renames', '--name-status', '-z', from, to], { cwd: this.root });
+    if (names.code !== 0) return null;
+    const files: FileChange[] = [];
+    const parts = names.stdout.split('\0');
+    for (let i = 0; i + 1 < parts.length; i += 2) {
+      const status = parts[i];
+      const path = parts[i + 1];
+      // T (file <-> symlink type change) is restored like a modification.
+      if (path && (status === 'A' || status === 'M' || status === 'D' || status === 'T')) files.push({ path, status: status === 'T' ? 'M' : status });
+    }
+    const stat = await git(['diff', '--no-renames', '--numstat', from, to], { cwd: this.root });
+    let insertions = 0;
+    let deletions = 0;
+    if (stat.code === 0) {
+      for (const line of stat.stdout.split('\n')) {
+        const m = /^(\d+)\t(\d+)\t/.exec(line); // binary files show "-"
+        if (m) {
+          insertions += Number(m[1]);
+          deletions += Number(m[2]);
+        }
+      }
+    }
+    return { files, insertions, deletions };
+  }
+
+  async diff(from: string, to: string): Promise<string | null> {
+    if (!this.available) return null;
+    const r = await git(['diff', '--no-renames', '--no-color', from, to], { cwd: this.root });
+    return r.code === 0 ? r.stdout : null;
+  }
+
+  async restore(target: string, current: string): Promise<{ restored: number; removed: number } | null> {
+    if (!this.available) return null;
+    const ch = await this.changes(target, current);
+    if (!ch) return null;
+    const toWrite = ch.files.filter((f) => f.status !== 'A').map((f) => f.path); // in target, changed or deleted since
+    const toRemove = ch.files.filter((f) => f.status === 'A').map((f) => f.path); // created since the target
+    let restored = 0;
+    if (toWrite.length > 0) {
+      const idx = join(this.tmp, 'restore-index');
+      const env = { GIT_INDEX_FILE: idx };
+      const read = await git(['read-tree', target], { cwd: this.root, env });
+      if (read.code !== 0) return null;
+      const out = await git(['checkout-index', '-f', '-z', '--stdin'], { cwd: this.root, env, input: toWrite.join('\0') + '\0' });
+      if (out.code !== 0) return null;
+      restored = toWrite.length;
+      rmSync(idx, { force: true });
+    }
+    let removed = 0;
+    for (const rel of toRemove) {
+      try {
+        unlinkSync(join(this.root, rel));
+        removed += 1;
+        pruneEmptyDirs(this.root, rel);
+      } catch {
+        /* already gone */
+      }
+    }
+    return { restored, removed };
+  }
+
+  dispose(): void {
+    if (this.tmp) rmSync(this.tmp, { recursive: true, force: true });
+    this.available = false;
+  }
+}
+
+/** Remove now-empty parent directories of `rel` (a repo-relative posix path), innermost first, never above the root. */
+function pruneEmptyDirs(root: string, rel: string): void {
+  const parts = rel.split('/').slice(0, -1);
+  for (let n = parts.length; n > 0; n--) {
+    const dir = join(root, ...parts.slice(0, n));
+    try {
+      if (readdirSync(dir).length > 0) return;
+      rmdirSync(dir);
+    } catch {
+      return;
+    }
+  }
+}
+
+/** For directories that are not git repositories, or in tests. */
+export class NoCheckpoints implements Checkpointer {
+  readonly available = false;
+  readonly root = '';
+  readonly prefix = '';
+  snapshot = async () => null;
+  changes = async () => null;
+  diff = async () => null;
+  restore = async () => null;
+  dispose(): void {}
+}
+
+/** Create a checkpointer for `cwd`: git-backed when possible, otherwise a no-op. */
+export async function createCheckpoints(cwd: string): Promise<Checkpointer> {
+  const g = new GitCheckpoints(cwd);
+  return (await g.init()) ? g : new NoCheckpoints();
+}
+
