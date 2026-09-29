@@ -99,3 +99,13 @@ README, ROUTING.md, LICENSE (MIT), .gitignore.
 ## Build order (test + build after each)
 1 scaffold+config · 2 events+claude parser · 3 router · 4 classifier · 5 planner · 6 tracker · 7 verifier ·
 8 runner · 9 pipeline · 10 UI components · 11 App+cli · 12 docs+packaging
+
+## Implementation notes (deviations from the plan above)
+- Ink 6 + Node >= 20 instead of Ink 7 (needs Node >= 22) so `npx` works on more machines. `execa` dropped; `node:child_process` is enough.
+- Prompts go to `claude -p` over stdin (no argv limits, no 3s stdin wait).
+- `bypassPermissions` is refused by Claude Code when running as root, so the runner falls back to `acceptEdits` and warns.
+- One `Pipeline.cancel()` replaces `cancelStep`/`cancelTask`: a cancelled step ends the task, since later steps depend on it.
+- Classifier fallback is enforced in the router (always sonnet), not only via the complexity map.
+- Planner prompt tuned after a live run (Opus, "snake game"): $0.067 / 2.5k output tokens down to $0.030 / 0.9k.
+- The `--model` flag takes a tier name (haiku|sonnet|opus); tiers map to concrete model names in the config.
+- Verification runs after every step; use `verify.commands` if early steps legitimately cannot pass yet.
