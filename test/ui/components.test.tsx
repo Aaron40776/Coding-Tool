@@ -396,6 +396,95 @@ describe('PlanApproval', () => {
     expect(onApprove).not.toHaveBeenCalled();
   });
 
+  const type = async (stdin: { write: (s: string) => void }, text: string) => {
+    for (const ch of text) {
+      stdin.write(ch);
+      await wait();
+    }
+  };
+  const titles = (calls: { steps: { title: string }[] }[][]) => calls[0]![0]!.steps.map((s) => s.title);
+
+  it('adds a step after the selected one, with title and instructions', async () => {
+    const { stdin, onApprove } = setup();
+    stdin.write('a');
+    await wait();
+    await type(stdin, 'Add tests');
+    stdin.write(KEYS.enter);
+    await wait();
+    await type(stdin, 'write unit tests');
+    stdin.write(KEYS.enter);
+    await wait();
+    stdin.write(KEYS.enter);
+    await waitFor(() => onApprove.mock.calls.length === 1);
+    const steps = onApprove.mock.calls[0]![0].steps as { title: string; instructions: string; id: string }[];
+    expect(steps).toHaveLength(4);
+    expect(steps[1]).toMatchObject({ title: 'Add tests', instructions: 'write unit tests' });
+    expect(new Set(steps.map((x) => x.id)).size).toBe(4);
+  });
+
+  it('Esc while naming a new step removes it again', async () => {
+    const { stdin, lastFrame, onApprove } = setup();
+    stdin.write('a');
+    await wait();
+    stdin.write(KEYS.esc);
+    await wait();
+    expect(lastFrame()).toContain('step 1 of 3');
+    stdin.write(KEYS.enter);
+    await waitFor(() => onApprove.mock.calls.length === 1);
+    expect(onApprove.mock.calls[0]![0].steps).toHaveLength(3);
+  });
+
+  it('deletes a step with d, but never the last one', async () => {
+    const { stdin, lastFrame, onApprove } = setup();
+    stdin.write('d');
+    await wait();
+    stdin.write('d');
+    await wait();
+    expect(lastFrame()).toContain('step 1 of 1');
+    stdin.write('d');
+    await wait();
+    expect(lastFrame()).toContain('at least one step');
+    stdin.write(KEYS.enter);
+    await waitFor(() => onApprove.mock.calls.length === 1);
+    expect(onApprove.mock.calls[0]![0].steps).toHaveLength(1);
+  });
+
+  it('reorders steps with J and K and keeps the selection on the moved step', async () => {
+    const { stdin, lastFrame, onApprove } = setup();
+    stdin.write('J');
+    await wait();
+    expect(lastFrame()).toContain('step 2 of 3');
+    stdin.write('K');
+    await wait();
+    stdin.write('K');
+    await wait();
+    expect(lastFrame()).toContain('step 1 of 3');
+    stdin.write('J');
+    await wait();
+    stdin.write(KEYS.enter);
+    await waitFor(() => onApprove.mock.calls.length === 1);
+    expect(titles([onApprove.mock.calls[0] as never])).toEqual([plan.steps[1]!.title, plan.steps[0]!.title, plan.steps[2]!.title]);
+  });
+
+  it('edits instructions over several lines (backslash + Enter)', async () => {
+    const { stdin, lastFrame, onApprove } = setup();
+    stdin.write('i');
+    await wait();
+    for (let i = 0; i < 60; i++) stdin.write(KEYS.backspace);
+    await wait();
+    await type(stdin, 'first line\\');
+    stdin.write(KEYS.enter);
+    await wait();
+    await type(stdin, 'second line');
+    expect(lastFrame()).toContain('first line');
+    expect(lastFrame()).toContain('second line');
+    stdin.write(KEYS.enter);
+    await wait();
+    stdin.write(KEYS.enter);
+    await waitFor(() => onApprove.mock.calls.length === 1);
+    expect(onApprove.mock.calls[0]![0].steps[0].instructions).toBe('first line\nsecond line');
+  });
+
   it('cancels with Esc', async () => {
     const { stdin, onCancel } = setup();
     stdin.write(KEYS.esc);

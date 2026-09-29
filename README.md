@@ -80,8 +80,9 @@ Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prom
 **Referencing files:** type `@` and a path (`Tab` completes it): `refactor @src/parser.ts to use async iterators`. The file's contents go to the planner and the first coding step.
 **Multi-line prompts:** end a line with `\` and press Enter (or Alt+Enter), or just paste; pasted text never sends by itself.
 
-**Plan approval.** After planning, review the plan: `↑ ↓` select, `Space` skip a step, `m` pick a model for a step,
-`e` / `i` edit a step's title / instructions, `PgUp` / `PgDn` scroll a long step, `Enter` run, `Esc` cancel. Full step text is always reachable, even on a small terminal.
+**Plan approval.** After planning, review the plan: `↑ ↓` select, `Space` skip a step, `a` add a step after the selected one, `d` delete it, `J` / `K` move it down / up,
+`m` pick a model for a step, `e` / `i` edit a step's title / instructions (instructions can be multi-line: `Alt+Enter`, or `\` then `Enter`), `PgUp` / `PgDn` scroll a long step,
+`Enter` run, `Esc` cancel. Full step text is always reachable, even on a small terminal.
 
 ### The screen
 
