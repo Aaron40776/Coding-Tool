@@ -1,5 +1,7 @@
 # smart
 
+[![CI](https://github.com/Aaron40776/Coding-Tool/actions/workflows/ci.yml/badge.svg)](https://github.com/Aaron40776/Coding-Tool/actions/workflows/ci.yml)
+
 **Claude Code, routed to the cheapest model that can do each step well.**
 
 `smart` is a full-screen terminal UI that wraps [Claude Code](https://docs.claude.com/claude-code). Type a task such as
