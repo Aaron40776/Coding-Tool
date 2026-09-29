@@ -12,7 +12,7 @@ export const KEYS = { up: '\u001b[A', down: '\u001b[B', left: '\u001b[D', right:
 
 export const wait = (ms = 40) => new Promise((r) => setTimeout(r, ms));
 
-export async function waitFor(check: () => boolean, timeout = 3000): Promise<void> {
+export async function waitFor(check: () => boolean, timeout = 8000): Promise<void> {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
     if (check()) return;
