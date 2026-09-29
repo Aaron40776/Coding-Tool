@@ -1,8 +1,11 @@
 import { Box, Text } from 'ink';
+import { useEffect } from 'react';
 import type { OutputLine } from '../state.js';
 import { ACCENT } from '../theme.js';
 
 const MAX_LINES_PER_ENTRY = 8;
+/** Only long tool/command output is shortened. Replies, help, diffs and stats are shown in full (they scroll). */
+const CAPPED = new Set<OutputLine['kind']>(['verify-ok', 'verify-fail', 'error']);
 
 export interface Segment {
   text: string;
@@ -62,7 +65,7 @@ export function toRows(lines: OutputLine[], width = 0): Row[] {
     // Tool lines stay on one row (paths); everything else is wrapped so reasons and errors stay readable.
     const wrapped = l.kind === 'tool' || l.kind.startsWith('diff') || width === 0 ? l.text.split('\n') : l.text.split('\n').flatMap((p) => wrapText(p, width));
     const parts = wrapped;
-    const shown = parts.length > MAX_LINES_PER_ENTRY ? [...parts.slice(0, MAX_LINES_PER_ENTRY), `… ${parts.length - MAX_LINES_PER_ENTRY} more lines`] : parts;
+    const shown = CAPPED.has(l.kind) && parts.length > MAX_LINES_PER_ENTRY ? [...parts.slice(0, MAX_LINES_PER_ENTRY), `… ${parts.length - MAX_LINES_PER_ENTRY} more lines`] : parts;
     return shown.map((text, i) => ({ key: `${l.id}:${i}`, kind: l.kind, text, first: i === 0 }));
   });
 }
@@ -113,11 +116,16 @@ export interface OutputLogProps {
   width?: number;
   focused?: boolean;
   welcome?: string[];
+  /** Reports how far up the log can be scrolled, so key handlers can stop there. */
+  onMaxScroll?: (max: number) => void;
 }
 
-export function OutputLog({ lines, height, scroll, width, focused, welcome }: OutputLogProps) {
+export function OutputLog({ lines, height, scroll: wanted, width, focused, welcome, onMaxScroll }: OutputLogProps) {
   const rows = toRows(lines, width ? width - 4 : 0); // minus the 2-col row prefix and a margin
   const visible = Math.max(1, height - 3); // borders + title
+  const max = Math.max(0, rows.length - visible);
+  const scroll = Math.min(wanted, max); // never scroll past the first row
+  useEffect(() => onMaxScroll?.(max), [max, onMaxScroll]);
   const end = Math.max(0, rows.length - scroll);
   const slice = rows.slice(Math.max(0, end - visible), end);
   return (

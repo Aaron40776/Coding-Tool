@@ -57,7 +57,7 @@ export async function runPrint(pipeline: Pipeline, bus: EventBus, prompt: string
       case 'plan:ready':
         plan = e.plan;
         routes = e.routes;
-        for (const s of e.plan.steps) steps.set(s.id, { id: s.id, title: s.title, model: e.routes[s.id]?.model, reason: e.routes[s.id]?.reason, attempts: 0, outcome: 'pending' });
+        for (const s of e.plan.steps) steps.set(s.id, { id: s.id, title: s.title, model: e.routes[s.id]?.model, reason: e.routes[s.id]?.reason, attempts: 0, outcome: e.done?.includes(s.id) ? 'done' : 'pending' });
         if (e.plan.steps.length > 1) log(`plan: ${e.plan.steps.length} steps — ${e.plan.summary}`);
         break;
       case 'plan:approved':
@@ -93,7 +93,11 @@ export async function runPrint(pipeline: Pipeline, bus: EventBus, prompt: string
       case 'step:failed': {
         const st = steps.get(e.stepId);
         if (st) st.outcome = e.error === 'Cancelled' ? 'cancelled' : 'failed';
-        if (e.error !== 'Cancelled') log(`  step failed: ${e.error.split('\n')[0]}`);
+        if (e.error !== 'Cancelled') {
+          log(`  step failed: ${e.error.split('\n')[0]}`);
+          // A failed step is an error for the caller too: without this, --output-format json says ok:false with error:null.
+          errorMessage ??= `Step "${st?.title ?? e.stepId}" failed: ${e.error.split('\n')[0]}`;
+        }
         break;
       }
       case 'changes':

@@ -84,6 +84,25 @@ describe('PipelineBar', () => {
   });
 });
 
+describe('PlanChecklist windowing', () => {
+  const many = { summary: 's', features: [], fileStructure: [], steps: Array.from({ length: 10 }, (_, i) => ({ id: `s${i}`, title: `Step number ${i + 1}`, instructions: 'x', files: [], acceptance: [] })) };
+  const rts = Object.fromEntries(many.steps.map((s) => [s.id, { tier: 'sonnet' as const, model: 'sonnet', reason: 'multi_file → sonnet' }]));
+
+  it('keeps the running step visible in a long plan and says how many are hidden', () => {
+    const status = Object.fromEntries(many.steps.map((s, i) => [s.id, i < 7 ? 'done' : i === 7 ? 'active' : 'pending'])) as never;
+    const f = render(<PlanChecklist plan={many} routes={rts} stepStatus={status} escalatedTo={{}} height={12} />).lastFrame()!;
+    expect(f).toContain('Step number 8');
+    expect(f).not.toContain('Step number 1 ');
+    expect(f).toMatch(/↑ \d+ earlier/);
+  });
+  it('shows everything when it fits', () => {
+    const f = render(<PlanChecklist plan={many} routes={rts} stepStatus={{}} escalatedTo={{}} height={40} />).lastFrame()!;
+    expect(f).toContain('Step number 1');
+    expect(f).toContain('Step number 10');
+    expect(f).not.toContain('more');
+  });
+});
+
 describe('PlanChecklist', () => {
   it('ticks steps live and shows a badge and routing reason per step', () => {
     const f = render(
@@ -134,6 +153,21 @@ describe('OutputLog', () => {
     const rows = toRows([{ id: 1, kind: 'info', text: 'word '.repeat(20).trim() }, { id: 2, kind: 'tool', text: 'Edit ' + 'p/'.repeat(30) }], 30);
     expect(rows.filter((r) => r.kind === 'info').length).toBeGreaterThan(2);
     expect(rows.filter((r) => r.kind === 'tool')).toHaveLength(1);
+  });
+  it('shows replies, help and diffs in full; only long command output is capped', () => {
+    const long = Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n');
+    expect(toRows([{ id: 1, kind: 'text', text: long }])).toHaveLength(30);
+    expect(toRows([{ id: 1, kind: 'info', text: long }])).toHaveLength(30);
+    expect(toRows([{ id: 1, kind: 'diff-add', text: long }])).toHaveLength(30);
+    expect(toRows([{ id: 1, kind: 'verify-fail', text: long }])).toHaveLength(9);
+  });
+  it('never scrolls past the first row and reports how far it can scroll', () => {
+    const lines = Array.from({ length: 30 }, (_, i) => ({ id: i, kind: 'info' as const, text: `row ${i}` }));
+    const seen: number[] = [];
+    const f = render(<OutputLog lines={lines} height={8} scroll={500} onMaxScroll={(n) => seen.push(n)} />).lastFrame()!;
+    expect(f).toContain('row 0'); // clamped to the top instead of a blank pane
+    expect(f).not.toContain('row 29');
+    expect(seen.at(-1)).toBe(30 - 5);
   });
   it('caps very long multi-line entries', () => {
     const rows = toRows([{ id: 1, kind: 'verify-fail', text: Array.from({ length: 40 }, (_, i) => `e${i}`).join('\n') }]);
@@ -431,6 +465,18 @@ describe('PlanApproval', () => {
     stdin.write(KEYS.enter);
     await waitFor(() => onApprove.mock.calls.length === 1);
     expect(onApprove.mock.calls[0]![0].steps).toHaveLength(3);
+  });
+
+  it('an empty name for a new step cancels it instead of adding a blank step', async () => {
+    const { stdin, onApprove } = setup();
+    stdin.write('a');
+    await wait();
+    stdin.write(KEYS.enter);
+    await wait();
+    stdin.write(KEYS.enter);
+    await waitFor(() => onApprove.mock.calls.length === 1);
+    expect(onApprove.mock.calls[0]![0].steps).toHaveLength(3);
+    expect(onApprove.mock.calls[0]![0].steps.every((s: { title: string }) => s.title.trim() !== '')).toBe(true);
   });
 
   it('deletes a step with d, but never the last one', async () => {

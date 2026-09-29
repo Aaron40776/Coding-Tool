@@ -25,7 +25,11 @@ function parseModel(value: string): ModelTier {
   return v;
 }
 
+/** True while the interactive UI owns the alternate screen. Errors must be printed after leaving it, or the exit wipes them. */
+let altScreenActive = false;
+
 const fail = (message: string, hint?: string): never => {
+  if (altScreenActive) process.stdout.write('\x1b[?1049l');
   process.stderr.write(`smart: ${message}\n${hint ? `${hint}\n` : ''}`);
   process.exit(1);
 };
@@ -139,8 +143,11 @@ async function main() {
     // `kill` / `timeout` / a closed terminal must stop Claude Code too, not orphan it (it would keep editing files and spending money).
     const stop = (code: number) => () => {
       pipeline.cancel();
-      checkpoints.dispose();
-      process.exit(code);
+      // Give the task a moment to save its state (checkpoint, /resume, cost record) before the process goes.
+      void pipeline.settle(3000).then(() => {
+        checkpoints.dispose();
+        process.exit(code);
+      });
     };
     process.on('SIGTERM', stop(143));
     process.on('SIGHUP', stop(129));
@@ -153,13 +160,18 @@ async function main() {
   }
 
   let exitCode = 0;
-  const altScreen = (on: boolean) => process.stdout.write(on ? '\x1b[?1049h\x1b[H' : '\x1b[?1049l');
+  const altScreen = (on: boolean) => {
+    altScreenActive = on;
+    process.stdout.write(on ? '\x1b[?1049h\x1b[H' : '\x1b[?1049l');
+  };
   altScreen(true);
-  const restore = () => altScreen(false);
+  const restore = () => {
+    if (altScreenActive) altScreen(false);
+  };
   process.on('exit', restore);
   process.on('SIGTERM', () => {
     pipeline.cancel();
-    process.exit(143);
+    void pipeline.settle(3000).then(() => process.exit(143));
   });
 
   const app = render(
@@ -183,6 +195,8 @@ async function main() {
     { exitOnCtrlC: false, incrementalRendering: process.env.SMART_INCREMENTAL === '1', maxFps: 12 },
   );
   await app.waitUntilExit();
+  // Ctrl+C / Esc cancel a running task: let it finish saving before the process exits.
+  await pipeline.settle(3000);
   restore();
   process.off('exit', restore);
   process.exit(exitCode);

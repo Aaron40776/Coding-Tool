@@ -85,6 +85,9 @@ export class Pipeline {
   private limits: Limits | null;
   private warnedWindows = new Set<string>();
   private leanOk = true;
+  /** The task currently running, so a shutdown can wait for its state to be saved (see `settle`). */
+  private current: Promise<unknown> | null = null;
+  private bgSnapshot: Promise<string | null> | null = null;
   /** Every Claude call goes through here so account usage reported in any stream is captured. */
   private readonly run: RunClaudeFn;
 
@@ -188,8 +191,29 @@ export class Pipeline {
 
   // ---- the task ---------------------------------------------------------------------------
 
-  async runTask(prompt: string, opts: TaskOptions = {}): Promise<TaskSummary> {
-    if (this.running) throw new SmartError('internal', 'A task is already running.');
+  runTask(prompt: string, opts: TaskOptions = {}): Promise<TaskSummary> {
+    if (this.running) return Promise.reject(new SmartError('internal', 'A task is already running.'));
+    const p = this.execute(prompt, opts);
+    this.current = p;
+    return p;
+  }
+
+  /** Resolves once the running task (if any) has finished saving its state, or after `ms`. Call after `cancel()` and before exiting. */
+  async settle(ms = 3000): Promise<void> {
+    const p = this.current;
+    if (!p) return;
+    await Promise.race([p.catch(() => undefined), new Promise<void>((r) => setTimeout(r, ms).unref?.())]);
+  }
+
+  private async execute(prompt: string, opts: TaskOptions): Promise<TaskSummary> {
+    const myId = ++this.runId;
+    this.releaseRun = () => {
+      if (this.runId !== myId) return;
+      this.running = false;
+      this.ctl = null;
+      this.approval = null;
+    };
+    const release = this.releaseRun;
     this.running = true;
     this.ctl = new AbortController();
     this.taskUsage = emptyUsage();
@@ -200,7 +224,6 @@ export class Pipeline {
     this.overhead = emptyUsage();
     const touched: string[] = [];
     let startTree: string | null = null;
-    let snapshotting: Promise<string | null> | null = null;
     const doneRef: { ids: Set<string> } = { ids: new Set() };
     this.lastReply = '';
 
@@ -226,7 +249,8 @@ export class Pipeline {
         emit({ type: 'notice', level: 'info', message: 'Not a git repository, so /undo and /diff are unavailable here. Run `git init` to enable them.' });
       }
       // The git snapshot runs while the classifier and planner think; it is only needed before the first file is touched.
-      snapshotting = dryRun ? Promise.resolve(null) : this.cp.snapshot().catch(() => null);
+      const snapshotting = dryRun ? Promise.resolve(null) : this.cp.snapshot().catch(() => null);
+      this.bgSnapshot = snapshotting;
       const signal = this.ctl.signal;
 
       const resumed = opts.resume ? this.conv.pending : undefined;
@@ -242,7 +266,7 @@ export class Pipeline {
         for (const st of ['classify', 'plan', 'approve'] as const) stage(st, 'skipped');
         const left = plan.steps.filter((x) => !x.skipped && !doneIds.has(x.id)).length;
         emit({ type: 'notice', level: 'info', message: `Resuming: ${doneIds.size} step${doneIds.size === 1 ? '' : 's'} already done, ${left} to go.` });
-        emit({ type: 'plan:ready', plan, routes: this.routePlan(plan, classification) });
+        emit({ type: 'plan:ready', plan, routes: this.routePlan(plan, classification), done: [...doneIds] });
         emit({ type: 'plan:approved', plan });
       } else {
         // 1. classify
@@ -299,7 +323,7 @@ export class Pipeline {
         }
       }
 
-      startTree = await snapshotting!;
+      startTree = await snapshotting;
 
       // 4. execute (+ verify per step)
       at('execute');
@@ -322,27 +346,35 @@ export class Pipeline {
       stage('execute', failed ? 'failed' : 'done');
       return await this.finish(summary, { startedAt, prompt, touched, startTree, doneIds });
     } catch (e) {
-      if (isCancelled(e)) {
-        summary.cancelled = true;
-        stage(current, 'failed');
-        emit({ type: 'task:cancelled', taskId });
-      } else {
+      summary.ok = false;
+      if (isCancelled(e)) summary.cancelled = true;
+      // Save the state (checkpoint, /resume, cost record) BEFORE telling the frontend the task is over: a one-shot run exits
+      // as soon as it sees the terminal event, and would otherwise lose all of it.
+      const out = await this.finish(summary, { startedAt, prompt, touched, startTree, aborted: true, doneIds: doneRef.ids });
+      stage(current, 'failed');
+      if (summary.cancelled) emit({ type: 'task:cancelled', taskId });
+      else {
         const err = e instanceof SmartError ? e : new SmartError('internal', (e as Error).message ?? String(e));
-        stage(current, 'failed');
         emit({ type: 'error', kind: err.kind, message: err.message, hint: err.hint });
       }
-      summary.ok = false;
-      return await this.finish(summary, { startedAt, prompt, touched, startTree, aborted: true, doneIds: doneRef.ids });
+      return out;
     } finally {
-      // An early exit (a direct answer, a cancel) must not leave a snapshot running on the shared temporary index: the next task would collide with it.
-      await snapshotting?.catch(() => null);
-      this.running = false;
-      this.ctl = null;
-      this.approval = null;
+      release();
     }
   }
 
   // ---- internals --------------------------------------------------------------------------
+
+  private runId = 0;
+  private releaseRun: () => void = () => undefined;
+
+  /**
+   * Ends the running task for callers. Safe to call twice, and a late call from an old run never touches a newer one
+   * (a frontend may start the next task the moment it sees the terminal event).
+   */
+  private release(): void {
+    this.releaseRun();
+  }
 
   /** Answers without a coding session: small talk (one short Haiku call) or a question the classifier already answered (no extra call). */
   private async respond(
@@ -739,6 +771,9 @@ export class Pipeline {
   ): Promise<TaskSummary> {
     const { startedAt, prompt, aborted = false } = f;
     const overhead = this.overhead;
+    // A snapshot still running in the background (early exit: direct answer, cancel) shares the temporary index with the next task: wait for it.
+    await this.bgSnapshot?.catch(() => null);
+    this.bgSnapshot = null;
     const changed = await this.summarizeChanges(summary, f.startTree, prompt);
     if (!summary.dryRun && summary.steps.some((s) => s.outcome !== 'skipped')) {
       recordTask(this.conv, {
@@ -773,6 +808,8 @@ export class Pipeline {
       const err = this.deps.tracker.append(record);
       if (err) this.bus.emit({ type: 'notice', level: 'warn', message: err });
     }
+    // The task is over for callers from here on: a frontend that reacts to the terminal event below may start the next one at once.
+    this.release();
     if (!aborted) {
       this.bus.emit({ type: 'stage', stage: 'done', status: summary.ok ? 'done' : 'failed' });
       this.bus.emit({ type: 'task:done', taskId: summary.taskId, totals: summary.totals, ok: summary.ok, at: this.now() });

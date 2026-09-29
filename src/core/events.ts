@@ -11,7 +11,7 @@ export type SmartEvent =
   | { type: 'stage'; stage: Stage; status: StageStatus }
   | { type: 'notice'; level: 'info' | 'warn'; message: string }
   | { type: 'classified'; classification: Classification; route: RouteDecision }
-  | { type: 'plan:ready'; plan: Plan; routes: Record<string, RouteDecision> }
+  | { type: 'plan:ready'; plan: Plan; routes: Record<string, RouteDecision>; /** Steps already finished in an earlier run (`/resume`). */ done?: string[] }
   | { type: 'plan:approved'; plan: Plan }
   | { type: 'step:start'; stepId: string; title: string; route: RouteDecision; attempt: number; at?: number }
   | { type: 'step:output'; stepId: string; kind: 'text' | 'tool'; text: string }

@@ -227,3 +227,51 @@ describe('review fixes', () => {
     expect(seen.slice(2).every((v) => !v)).toBe(true);
   });
 });
+
+describe('finishing a task', () => {
+  it('saves the cost record before the frontend is told the task failed or was cancelled', async () => {
+    const order: string[] = [];
+    const tracker = { append: () => { order.push('tracker'); return null; }, load: () => [] } as unknown as import('../../src/core/tracker.js').Tracker;
+    const t = setup({ executor: () => { throw new SmartError('auth', 'not logged in'); } });
+    // rebuild a pipeline that has a tracker, sharing the scripted claude
+    const { pipeline, events } = (() => {
+      const bus = new EventBus();
+      const evs: SmartEvent[] = [];
+      bus.subscribe((e) => { evs.push(e); if (e.type === 'error' || e.type === 'task:cancelled' || e.type === 'task:done') order.push(e.type); });
+      const run: RunClaudeFn = async (o) => {
+        const props = (o.jsonSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+        if (props && 'complexity' in props) return { isError: false, subtype: 'success', text: '', structured: { complexity: 'small_edit', needsPlan: false, reason: 'r' }, usage: { ...emptyUsage(), costUsd: 0.01 }, sessionId: 's', numTurns: 1 };
+        throw new SmartError('auth', 'not logged in');
+      };
+      return { pipeline: new Pipeline(defaultConfig(), bus, t.cwd, { run, tracker, uid: 1000, listFiles: () => [] }), events: evs };
+    })();
+    await pipeline.runTask('rename foo');
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+    expect(order).toEqual(['tracker', 'error']);
+  });
+
+  it('lets a frontend start the next task from the terminal event without "already running"', async () => {
+    const t = setup();
+    let next: Promise<unknown> | null = null;
+    let started = false;
+    t.pipeline.bus.subscribe((e) => {
+      if (e.type === 'task:done' && !started) {
+        started = true;
+        next = t.pipeline.runTask('hey');
+      }
+    });
+    await t.pipeline.runTask('rename foo');
+    await expect(next).resolves.toMatchObject({ ok: true });
+  });
+
+  it('settle() resolves at once when idle and waits for a running task to finish saving', async () => {
+    const t = setup({ executor: async () => { await new Promise((r) => setTimeout(r, 30)); return { isError: false, subtype: 'success', text: 'ok', structured: undefined, usage: emptyUsage(), sessionId: 's', numTurns: 1 }; } });
+    await t.pipeline.settle(50);
+    const running = t.pipeline.runTask('rename foo');
+    await new Promise((r) => setTimeout(r, 5));
+    t.pipeline.cancel();
+    await t.pipeline.settle(2000);
+    expect(t.pipeline.isRunning).toBe(false);
+    await running;
+  });
+});

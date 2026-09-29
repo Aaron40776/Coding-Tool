@@ -37,13 +37,25 @@ export interface PlanChecklistProps {
 
 /** The plan as a live checklist: status mark, title, model badge, and the routing reason underneath. */
 export function PlanChecklist({ plan, routes, stepStatus, escalatedTo, durations, selected, focused, height }: PlanChecklistProps) {
+  // Long plans are windowed around the step in focus (the selected one, else the one running) so the current step never scrolls out of sight.
+  const steps = plan?.steps ?? [];
+  const rowsPer = 2;
+  const room = height === undefined ? steps.length : Math.max(1, Math.floor((height - 3) / rowsPer));
+  const windowed = steps.length > room;
+  const size = windowed ? Math.max(1, room - 1) : steps.length; // one row is kept for the "more" note
+  const focus = focused && selected !== undefined ? selected : Math.max(0, steps.findIndex((s) => { const st = stepStatus[s.id]; return st === 'active' || st === 'verifying'; }));
+  const first = windowed ? Math.max(0, Math.min(focus - Math.floor(size / 2), steps.length - size)) : 0;
+  const shown = steps.slice(first, first + size);
+  const before = first;
+  const after = steps.length - first - shown.length;
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={focused ? ACCENT : 'gray'} paddingX={1} overflow="hidden" height={height}>
       <Text bold>Plan</Text>
       {!plan ? (
         <Text dimColor>No plan yet.</Text>
       ) : (
-        plan.steps.map((step, i) => {
+        shown.map((step, k) => {
+          const i = first + k;
           const status = step.skipped ? 'skipped' : (stepStatus[step.id] ?? 'pending');
           const route = routes[step.id];
           const tier = escalatedTo[step.id] ?? route?.tier;
@@ -71,6 +83,7 @@ export function PlanChecklist({ plan, routes, stepStatus, escalatedTo, durations
           );
         })
       )}
+      {windowed ? <Text dimColor wrap="truncate-end">{`${before > 0 ? `↑ ${before} earlier` : ''}${before > 0 && after > 0 ? ' · ' : ''}${after > 0 ? `↓ ${after} more` : ''}`}</Text> : null}
     </Box>
   );
 }
