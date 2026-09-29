@@ -109,7 +109,8 @@ export async function runStep(o: RunStepOptions): Promise<StepRunResult> {
   const onEvent = (e: ClaudeStreamEvent) => {
     if (e.kind === 'text') o.onOutput?.('text', e.text);
     else if (e.kind === 'tool') {
-      o.onOutput?.('tool', e.summary);
+      // Show project-relative paths: absolute ones are long and add no information.
+      o.onOutput?.('tool', e.summary.split(`${o.cwd}/`).join(''));
       if (e.writtenFile) touched.add(relative(o.cwd, resolve(o.cwd, e.writtenFile)) || e.writtenFile);
     } else if (e.kind === 'progress') o.onProgress?.(e);
   };

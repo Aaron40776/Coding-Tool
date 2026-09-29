@@ -1,0 +1,194 @@
+import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { homedir } from 'node:os';
+import { useEffect, useReducer, useRef, useState } from 'react';
+import type { EventBus } from '../core/events.js';
+import type { Pipeline } from '../core/pipeline.js';
+import type { Tracker } from '../core/tracker.js';
+import type { ModelTier } from '../core/types.js';
+import { HELP_TEXT, parseInput } from './commands.js';
+import { CostMeter } from './components/CostMeter.js';
+import { InputBox } from './components/InputBox.js';
+import { OutputLog } from './components/OutputLog.js';
+import { PipelineBar } from './components/PipelineBar.js';
+import { PlanApproval } from './components/PlanApproval.js';
+import { PlanChecklist } from './components/PlanChecklist.js';
+import { StatsView } from './components/StatsView.js';
+import { initialState, reduce, taskUsage } from './state.js';
+import { ACCENT } from './theme.js';
+
+type Focus = 'input' | 'plan' | 'output';
+
+export function shortPath(p: string, max = 28): string {
+  const home = homedir();
+  const withTilde = home && p.startsWith(home) ? `~${p.slice(home.length)}` : p;
+  return withTilde.length > max ? `…${withTilde.slice(-(max - 1))}` : withTilde;
+}
+
+export interface AppProps {
+  pipeline: Pipeline;
+  bus: EventBus;
+  tracker: Tracker;
+  trackerPath: string;
+  cwd: string;
+  version: string;
+  permissionMode: string;
+  initial?: { prompt: string; dryRun?: boolean; noPlan?: boolean; model?: ModelTier | null };
+  /** One-shot mode: exit when the task finishes. */
+  oneShot?: boolean;
+  onExit?: (ok: boolean) => void;
+}
+
+const WELCOME = ['Claude Code, routed to the cheapest capable model.', 'Type a task and press Enter, e.g. "make me a snake game".', '/help lists commands.'];
+
+export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permissionMode, initial, oneShot, onExit }: AppProps) {
+  const { exit } = useApp();
+  const { stdout } = useStdout();
+  const [size, setSize] = useState({ cols: stdout.columns ?? 100, rows: stdout.rows ?? 30 });
+  const [state, dispatch] = useReducer(reduce, undefined, initialState);
+  const [focus, setFocus] = useState<Focus>('input');
+  const [view, setView] = useState<'main' | 'stats'>('main');
+  const [dryRun, setDryRun] = useState(initial?.dryRun ?? false);
+  const [forced, setForced] = useState<ModelTier | null>(initial?.model ?? null);
+  const [selected, setSelected] = useState(0);
+  const [scroll, setScroll] = useState(0);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  useEffect(() => {
+    const on = () => setSize({ cols: stdout.columns ?? 100, rows: stdout.rows ?? 30 });
+    stdout.on('resize', on);
+    return () => void stdout.off('resize', on);
+  }, [stdout]);
+
+  // Subscribe first so no event emitted by the initial task is missed.
+  useEffect(() => bus.subscribe(dispatch), [bus]);
+  useEffect(() => pipeline.setDryRun(dryRun), [pipeline, dryRun]);
+  useEffect(() => pipeline.forceModel(forced), [pipeline, forced]);
+  useEffect(() => () => pipeline.cancel(), [pipeline]);
+
+  const startTask = (prompt: string, opts: { noPlan?: boolean } = {}) => {
+    dispatch({ type: 'ui:user', text: prompt });
+    setScroll(0);
+    pipeline.runTask(prompt, { dryRun, noPlan: opts.noPlan ?? initial?.noPlan }).catch((e: Error) => dispatch({ type: 'notice', level: 'warn', message: e.message }));
+  };
+
+  useEffect(() => {
+    if (initial?.prompt) startTask(initial.prompt, { noPlan: initial.noPlan });
+  }, []);
+
+  useEffect(() => {
+    if (oneShot && state.phase === 'finished') {
+      const t = setTimeout(() => {
+        onExit?.(Boolean(state.ok));
+        exit();
+      }, 150);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [oneShot, state.phase, state.ok, exit, onExit]);
+
+  const steps = state.plan?.steps.length ?? 0;
+  const busy = state.phase === 'running' || state.phase === 'approval';
+
+  useInput((input, key) => {
+    if (key.ctrl && input === 'c') {
+      pipeline.cancel();
+      onExit?.(false);
+      exit();
+      return;
+    }
+    if (state.phase === 'approval') return; // the approval screen owns the keyboard
+    if (key.escape) {
+      if (view === 'stats') setView('main');
+      else if (pipeline.isRunning) pipeline.cancel();
+      else if (focus !== 'input') setFocus('input');
+      return;
+    }
+    if (key.tab && view === 'main') {
+      const order: Focus[] = steps > 0 ? ['input', 'plan', 'output'] : ['input', 'output'];
+      setFocus((f) => order[(order.indexOf(f) + 1) % order.length] ?? 'input');
+      return;
+    }
+    if (focus === 'plan') {
+      if (key.upArrow) setSelected((s) => Math.max(0, s - 1));
+      if (key.downArrow) setSelected((s) => Math.min(Math.max(0, steps - 1), s + 1));
+    } else if (focus === 'output') {
+      if (key.upArrow) setScroll((s) => s + 1);
+      if (key.downArrow) setScroll((s) => Math.max(0, s - 1));
+      if (key.pageUp) setScroll((s) => s + 10);
+      if (key.pageDown) setScroll((s) => Math.max(0, s - 10));
+      if (key.end) setScroll(0);
+    }
+  });
+
+  const onSubmit = (text: string) => {
+    const cmd = parseInput(text);
+    if (!cmd) return;
+    switch (cmd.kind) {
+      case 'task':
+        return startTask(cmd.prompt);
+      case 'stats':
+        return setView('stats');
+      case 'help':
+        return dispatch({ type: 'ui:info', text: HELP_TEXT });
+      case 'quit':
+        pipeline.cancel();
+        onExit?.(true);
+        return exit();
+      case 'dry':
+        setDryRun(!dryRun);
+        return dispatch({ type: 'ui:info', text: `Dry-run ${!dryRun ? 'on: tasks will classify and plan only.' : 'off.'}` });
+      case 'model':
+        setForced(cmd.tier);
+        return dispatch({ type: 'ui:info', text: cmd.tier ? `Model forced to ${cmd.tier} for all steps.` : 'Model routing is automatic.' });
+      case 'error':
+        return dispatch({ type: 'notice', level: 'warn', message: cmd.message });
+    }
+  };
+
+  // header 1 + pipeline 1 + input 3 + hint 1 = 6, plus one spare row: Ink clears the screen when output fills every row.
+  const mainHeight = Math.max(6, size.rows - 7);
+  const tags = [dryRun ? 'dry-run' : '', forced ? `model:${forced}` : 'model:auto'].filter(Boolean);
+  const hint = state.phase === 'approval' ? '' : busy ? 'Esc cancel · Tab panel' : 'Enter send · Tab panel · /stats /model /dry /help · Ctrl+C quit';
+
+  return (
+    <Box flexDirection="column" width={size.cols} height={size.rows}>
+      <Box justifyContent="space-between" paddingX={1} height={1}>
+        <Box flexShrink={1}>
+          <Text wrap="truncate-end">
+            <Text color={ACCENT} bold>✻ smart</Text>
+            <Text dimColor>{` v${version} · ${shortPath(cwd)}${permissionMode === 'bypassPermissions' ? ' · bypass' : ''}`}</Text>
+          </Text>
+        </Box>
+        <Box flexShrink={0} marginLeft={2}>
+          <CostMeter task={taskUsage(state)} session={state.session} showTask={state.phase !== 'idle'} />
+        </Box>
+      </Box>
+      <Box paddingX={1}>
+        <PipelineBar stages={state.stages} />
+      </Box>
+      {state.phase === 'approval' && state.plan ? (
+        <PlanApproval plan={state.plan} routes={state.routes} onApprove={(p) => pipeline.approvePlan(p)} onCancel={() => pipeline.cancel()} height={mainHeight} />
+      ) : view === 'stats' ? (
+        <StatsView stats={tracker.stats()} recent={tracker.load().slice(-6).reverse()} path={trackerPath} height={mainHeight} />
+      ) : (
+        <Box height={mainHeight}>
+          <Box width="40%" flexShrink={0} flexDirection="column">
+            <PlanChecklist plan={state.plan} routes={state.routes} stepStatus={state.stepStatus} escalatedTo={state.escalatedTo} selected={selected} focused={focus === 'plan'} height={mainHeight} />
+          </Box>
+          <OutputLog lines={state.output} height={mainHeight} scroll={scroll} width={size.cols - Math.floor(size.cols * 0.4) - 4} focused={focus === 'output'} welcome={WELCOME} />
+        </Box>
+      )}
+      <InputBox
+        onSubmit={onSubmit}
+        active={focus === 'input' && view === 'main' && state.phase !== 'approval' && state.phase !== 'running'}
+        tags={tags}
+        placeholder={state.phase === 'idle' ? 'What should we build?' : 'Type another task…'}
+        busyText={state.phase === 'running' ? 'Working… (Esc to cancel)' : undefined}
+      />
+      <Box paddingX={1}>
+        <Text dimColor>{hint}</Text>
+      </Box>
+    </Box>
+  );
+}

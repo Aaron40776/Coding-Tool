@@ -79,7 +79,7 @@ describe('runStep', () => {
     const run: RunClaudeFn = async (o) => {
       seen = o;
       const evs: ClaudeStreamEvent[] = [
-        { kind: 'tool', name: 'Read', summary: 'Read a.ts' },
+        { kind: 'tool', name: 'Read', summary: `Read ${d}/a.ts` },
         { kind: 'tool', name: 'Edit', summary: 'Edit a.ts', writtenFile: join(d, 'a.ts') },
         { kind: 'tool', name: 'Write', summary: 'Write new.ts', writtenFile: join(d, 'sub/new.ts') },
         { kind: 'text', text: 'done' },

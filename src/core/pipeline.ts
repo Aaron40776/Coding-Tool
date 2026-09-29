@@ -264,6 +264,7 @@ export class Pipeline {
       rec.attempts += 1;
       rec.tier = tier;
       rec.model = decision.model;
+      emit({ type: 'stage', stage: 'verify', status: 'pending' });
       emit({ type: 'step:start', stepId: step.id, title: step.title, route: decision, attempt: rec.attempts });
       a.current('execute');
 
@@ -293,6 +294,8 @@ export class Pipeline {
           onCheck: (r) => emit({ type: 'step:verify', stepId: step.id, ...r }),
         });
         if (signal.aborted) throw cancelled();
+        emit({ type: 'stage', stage: 'verify', status: checks.length === 0 ? 'skipped' : v.ok ? 'done' : 'failed' });
+        a.current('execute');
         if (v.ok) ok = true;
         else failure = `${v.failure?.command} failed:\n${v.failure?.output}`;
       } catch (e) {

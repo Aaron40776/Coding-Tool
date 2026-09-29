@@ -51,7 +51,7 @@ const push = (s: UiState, kind: OutputLine['kind'], text: string, stepId?: strin
 });
 
 /** Adds a line of user input to the log (dispatched by the App, not the pipeline). */
-export type UiAction = SmartEvent | { type: 'ui:user'; text: string } | { type: 'ui:info'; text: string } | { type: 'ui:reset-plan' };
+export type UiAction = SmartEvent | { type: 'ui:user'; text: string } | { type: 'ui:info'; text: string };
 
 /** Pure reducer: pipeline events in, screen state out. */
 export function reduce(s: UiState, e: UiAction): UiState {
@@ -60,8 +60,6 @@ export function reduce(s: UiState, e: UiAction): UiState {
       return push(s, 'user', e.text);
     case 'ui:info':
       return push(s, 'info', e.text);
-    case 'ui:reset-plan':
-      return s;
     case 'task:start':
       return push(
         {

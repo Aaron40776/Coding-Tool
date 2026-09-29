@@ -1,0 +1,46 @@
+import { Box, Text } from 'ink';
+import type { Stage, StageStatus } from '../../core/events.js';
+import { ACCENT } from '../theme.js';
+import { Spinner } from './Spinner.js';
+
+const SHOWN: { stage: Stage; label: string }[] = [
+  { stage: 'classify', label: 'classify' },
+  { stage: 'plan', label: 'plan' },
+  { stage: 'execute', label: 'execute' },
+  { stage: 'verify', label: 'verify' },
+];
+
+function Icon({ status }: { status: StageStatus }) {
+  switch (status) {
+    case 'active':
+      return <Spinner color={ACCENT} />;
+    case 'done':
+      return <Text color="green">✓</Text>;
+    case 'failed':
+      return <Text color="red">✗</Text>;
+    case 'skipped':
+      return <Text dimColor>–</Text>;
+    default:
+      return <Text dimColor>○</Text>;
+  }
+}
+
+/** classify → plan → execute → verify. Approval is shown as part of the plan stage. */
+export function PipelineBar({ stages }: { stages: Record<Stage, StageStatus> }) {
+  const status = (s: Stage): StageStatus => (s === 'plan' && stages.approve === 'active' ? 'active' : stages[s]);
+  return (
+    <Box>
+      {SHOWN.map(({ stage, label }, i) => {
+        const st = status(stage);
+        return (
+          <Box key={stage}>
+            {i > 0 ? <Text dimColor>{' → '}</Text> : null}
+            <Icon status={st} />
+            <Text bold={st === 'active'} dimColor={st === 'pending' || st === 'skipped'}>{` ${label}`}</Text>
+            {stage === 'plan' && stages.approve === 'active' ? <Text color="yellow"> (review)</Text> : null}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}

@@ -343,3 +343,20 @@ describe('Pipeline: notices and tracking', () => {
     expect(tracker.load()[0]?.totals.costUsd).toBeCloseTo(0.034);
   });
 });
+
+describe('Pipeline: stage bookkeeping', () => {
+  it('closes the verify stage after checks pass, fail, or are skipped', async () => {
+    const verifyStatuses = (t: ReturnType<typeof setup>) => t.of('stage').filter((e) => e.stage === 'verify').map((e) => e.status);
+    const pass = setup();
+    await pass.pipeline.runTask('x');
+    expect(verifyStatuses(pass).at(-1)).toBe('done');
+
+    const fail = setup({ checks: () => false });
+    await fail.pipeline.runTask('x');
+    expect(verifyStatuses(fail).at(-1)).toBe('failed');
+
+    const none = setup({ config: (c) => { c.verify.commands = []; c.verify.auto = false; } });
+    await none.pipeline.runTask('x');
+    expect(verifyStatuses(none).at(-1)).toBe('skipped');
+  });
+});
