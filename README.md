@@ -1,4 +1,4 @@
-# smart
+# Smart
 
 [![CI](https://github.com/Aaron40776/Coding-Tool/actions/workflows/ci.yml/badge.svg)](https://github.com/Aaron40776/Coding-Tool/actions/workflows/ci.yml)
 
@@ -17,10 +17,18 @@ Requires Node.js 20+ and the [Claude Code CLI](https://docs.claude.com/claude-co
 `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once (or use `npm.cmd`). `smart` finds `claude.exe`, or the npm
 `claude.cmd` shim; set `SMART_CLAUDE_BIN` to point at a specific executable if detection fails.
 
+`smart` is not on the npm registry yet, so install it from a clone (this works on Windows, macOS and Linux):
+
 ```sh
-npm install -g @aaron40776/smart     # then run: smart
-npx @aaron40776/smart                # or without installing
+git clone https://github.com/Aaron40776/Coding-Tool.git
+cd Coding-Tool
+npm install
+npm run build
+npm link            # puts `smart` on your PATH; then run: smart
 ```
+
+To update later: `git pull`, `npm install`, `npm run build`. To remove: `npm unlink -g @aaron40776/smart`.
+(Once published, `npm install -g @aaron40776/smart` will work too.)
 
 ## Usage
 
