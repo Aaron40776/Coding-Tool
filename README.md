@@ -9,8 +9,6 @@
 each step (Haiku, Sonnet or Opus), runs Claude Code headless, checks the result with your tests, and escalates to a stronger
 model only when a step fails. Everything is shown live, with a running cost meter.
 
-> Screenshot placeholder: add `docs/screenshot.png` and reference it here.
-
 ## Install
 
 Requires Node.js 20+ and the [Claude Code CLI](https://docs.claude.com/claude-code) on your `PATH`, already logged in (run `claude` once).
@@ -66,12 +64,12 @@ Plans are auto-approved in `-p` mode. It needs no terminal, so it works in pipes
 | `/undo` | revert the file changes of the last task (needs git); repeat to step back further |
 | `/diff` | show what the last task changed |
 | `/mode <bypass\|edits\|plan\|auto>` | permission mode; `plan` is read-only |
+| `/help`, `/quit`, `Ctrl+C` | help, quit |
 
 Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prompts (kept across sessions).
 
 **Referencing files:** type `@` and a path (`Tab` completes it): `refactor @src/parser.ts to use async iterators`. The file's contents go to the planner and the first coding step.
 **Multi-line prompts:** end a line with `\` and press Enter (or Alt+Enter), or just paste; pasted text never sends by itself.
-| `/help`, `/quit`, `Ctrl+C` | help, quit |
 
 **Plan approval.** After planning, review the plan: `↑ ↓` select, `Space` skip a step, `m` pick a model for a step,
 `e` / `i` edit a step's title / instructions, `PgUp` / `PgDn` scroll a long step, `Enter` run, `Esc` cancel. Full step text is always reachable, even on a small terminal.
@@ -125,7 +123,9 @@ Claude Code in `--bare` mode to skip hooks, plugins and `CLAUDE.md` discovery. C
 `./smart.config.json`, then `~/.smart/smart.config.json`, then built-in defaults. Only set what you want to change.
 See [`smart.config.example.json`](smart.config.example.json) and **[ROUTING.md](ROUTING.md)** for what every rule does and how to tune it.
 
-History is written to `~/.smart/history.json` (`trackerPath`).
+History is written to `~/.smart/history.json` (`trackerPath`). Unknown keys in a config file and risky project-local settings
+(`verify.commands`, `runner.extraArgs` in a `smart.config.json` that came with a repo) produce a warning at startup, so a cloned repo cannot silently run commands.
+Stores (history, conversations, prompt history, limits) are written atomically with owner-only permissions; a corrupt file is moved aside, never lost.
 
 ## Safety
 
