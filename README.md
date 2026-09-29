@@ -1,4 +1,4 @@
-# smart
+# Smart
 
 [![CI](https://github.com/Aaron40776/Coding-Tool/actions/workflows/ci.yml/badge.svg)](https://github.com/Aaron40776/Coding-Tool/actions/workflows/ci.yml)
 
