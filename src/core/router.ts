@@ -66,18 +66,24 @@ export interface WarmSession {
   lastTier?: ModelTier;
   /** Epoch ms of the last Claude call in the session. */
   lastCallAt?: number;
+  /** Epoch ms of the last call per model: a model called recently has a warm cache for this session too. */
+  lastCallAtByTier?: Partial<Record<ModelTier, number>>;
 }
 
 /**
  * Prompt caches are per model. While a session's cache is warm, switching to a cheaper model
  * re-reads the whole history at full price and usually costs more than staying put. So automatic
- * routing may not downgrade during that window; upgrades, forced models and user choices always apply.
+ * routing may not downgrade to a model that would start cold; upgrades, forced models, user choices,
+ * and switches to a model that is itself warm in this session always apply.
  */
 export function applyWarmCache(decision: RouteDecision, session: WarmSession | null, nowMs: number, config: SmartConfig): RouteDecision {
   if (!config.session.keepWarmTier || !session?.lastTier || session.lastCallAt === undefined) return decision;
   if (decision.source !== 'complexity' && decision.source !== 'fallback') return decision;
   if (RANK[decision.tier] >= RANK[session.lastTier]) return decision;
-  if (nowMs - session.lastCallAt > config.session.cacheTtlSec * 1000) return decision;
+  const ttl = config.session.cacheTtlSec * 1000;
+  if (nowMs - session.lastCallAt > ttl) return decision;
+  const target = session.lastCallAtByTier?.[decision.tier];
+  if (target !== undefined && nowMs - target <= ttl) return decision; // the cheaper model is warm as well
   return {
     tier: session.lastTier,
     model: modelFor(session.lastTier, config),

@@ -61,15 +61,23 @@ export interface StepPromptInput {
   fileContext: FileContext[];
   /** Verification output from the previous failed attempt, if this is a retry. */
   failure?: string;
+  /** Conversation memory to include when the coding session cannot be resumed (new, lost, or resume disabled). */
+  memory?: string;
 }
 
 /** The lean per-step prompt: the step, its acceptance criteria and only the relevant files. No history. */
 export function buildStepPrompt(i: StepPromptInput): string {
   const parts: string[] = [];
   const multi = i.total > 1;
-  parts.push(multi ? `You are executing step ${i.index + 1} of ${i.total} of a plan. Do only this step.` : 'Complete this task.');
-  if (multi) parts.push(`Project goal: ${i.plan.summary}`);
-  parts.push(`${multi ? 'Step' : 'Task'}: ${i.step.title}\n${i.step.instructions}`);
+  if (i.memory) parts.push(`Context from earlier in this conversation (for reference):\n${i.memory}`);
+  if (multi) {
+    parts.push(`You are executing step ${i.index + 1} of ${i.total} of a plan. Do only this step.`);
+    parts.push(`Project goal: ${i.plan.summary}`);
+    parts.push(`Step: ${i.step.title}\n${i.step.instructions}`);
+  } else {
+    // A single-step task is the user's own words: keep them verbatim so follow-ups read naturally.
+    parts.push(i.step.instructions);
+  }
   if (i.step.acceptance.length) parts.push('Acceptance criteria:\n' + i.step.acceptance.map((a) => `- ${a}`).join('\n'));
   if (i.touchedFiles.length) parts.push('Files changed in earlier steps: ' + i.touchedFiles.join(', '));
   if (i.fileContext.length) {
@@ -91,6 +99,9 @@ export interface RunStepOptions extends Omit<StepPromptInput, 'fileContext'> {
   route: RouteDecision;
   permissionMode: string;
   signal?: AbortSignal;
+  /** Persisted Claude Code session to start (resume=false) or continue (resume=true). */
+  session?: { id: string; resume: boolean };
+  effort?: string;
   onOutput?: (kind: 'text' | 'tool', text: string) => void;
   onProgress?: (p: { inputTokens: number; outputTokens: number; cacheReadTokens: number }) => void;
 }
@@ -124,6 +135,8 @@ export async function runStep(o: RunStepOptions): Promise<StepRunResult> {
     signal: o.signal,
     appendSystemPrompt: EXECUTOR_APPEND,
     permissionMode: o.permissionMode,
+    session: o.session,
+    effort: o.effort,
     bare: o.config.runner.bare,
     maxBudgetUsd: o.config.limits.maxBudgetUsdPerStep,
     extraArgs: o.config.runner.extraArgs,

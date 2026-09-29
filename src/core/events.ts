@@ -21,6 +21,7 @@ export type SmartEvent =
   | { type: 'step:failed'; stepId: string; error: string }
   | { type: 'task:done'; taskId: string; totals: Usage; ok: boolean }
   | { type: 'task:cancelled'; taskId: string }
+  | { type: 'conversation'; tasks: number; resumed: boolean }
   | { type: 'error'; kind: ErrorKind; message: string; hint?: string };
 
 export type SmartEventType = SmartEvent['type'];

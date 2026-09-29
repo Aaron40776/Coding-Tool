@@ -30,6 +30,8 @@ export interface UiState {
   session: Usage;
   sessionAtTaskStart: Usage;
   ok?: boolean;
+  /** Tasks remembered in the current conversation (follow-ups build on them). */
+  chatTasks: number;
   nextId: number;
 }
 
@@ -41,7 +43,7 @@ export const initialStages = (): Record<Stage, StageStatus> => ({
 
 export const initialState = (): UiState => ({
   phase: 'idle', prompt: '', dryRun: false, stages: initialStages(), routes: {}, stepStatus: {}, stepAttempt: {},
-  escalatedTo: {}, output: [], session: emptyUsage(), sessionAtTaskStart: emptyUsage(), nextId: 1,
+  escalatedTo: {}, output: [], session: emptyUsage(), sessionAtTaskStart: emptyUsage(), chatTasks: 0, nextId: 1,
 });
 
 const push = (s: UiState, kind: OutputLine['kind'], text: string, stepId?: string): UiState => ({
@@ -113,6 +115,8 @@ export function reduce(s: UiState, e: UiAction): UiState {
       );
     case 'task:done':
       return push({ ...s, phase: 'finished', ok: e.ok }, e.ok ? 'info' : 'error', e.ok ? '✓ Done.' : '✗ Task did not complete.');
+    case 'conversation':
+      return { ...s, chatTasks: e.tasks };
     case 'task:cancelled':
       return push({ ...s, phase: 'finished', ok: false }, 'warn', 'Cancelled.');
     case 'error':

@@ -1,12 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import type { RunClaudeFn } from './claude.js';
 import { resolvePermissionMode } from './claude.js';
 import { classify } from './classifier.js';
 import type { SmartConfig } from './config.js';
+import { newConversation, recordTask, renderMemory, type Conversation, type ConversationStore } from './conversation.js';
 import { EventBus, type Stage } from './events.js';
 import { SmartError, cancelled, isCancelled } from './errors.js';
 import { projectFiles } from './files.js';
 import { makePlan, singleStepPlan } from './planner.js';
-import { route } from './router.js';
+import { applyWarmCache, route } from './router.js';
 import { runStep } from './runner.js';
 import type { StepOutcome, StepRecord, TaskRecord, Tracker } from './tracker.js';
 import { addUsage, emptyUsage, type Classification, type ModelTier, type Plan, type PlanStep, type RouteDecision, type Usage } from './types.js';
@@ -20,6 +22,9 @@ export interface PipelineDeps {
   now?: () => Date;
   /** Effective uid, injectable so the root fallback is testable. */
   uid?: number;
+  /** Conversation to continue (`smart -c`); a new one is started when omitted. */
+  conversation?: Conversation;
+  conversationStore?: ConversationStore;
 }
 
 export interface TaskOptions {
@@ -53,13 +58,17 @@ export class Pipeline {
   private ctl: AbortController | null = null;
   private approval: { resolve: (p: Plan) => void; reject: (e: Error) => void } | null = null;
   private announced = false;
+  private conv: Conversation;
+  private lastReply = '';
 
   constructor(
     private readonly config: SmartConfig,
     readonly bus: EventBus,
     private readonly cwd: string,
     private readonly deps: PipelineDeps,
-  ) {}
+  ) {
+    this.conv = deps.conversation ?? newConversation();
+  }
 
   // ---- commands from the frontend -------------------------------------------------------
 
@@ -74,6 +83,18 @@ export class Pipeline {
   }
   get sessionTotal(): Usage {
     return addUsage(this.sessionDone, this.taskUsage);
+  }
+  /** Number of tasks remembered in the current conversation. */
+  get chatTasks(): number {
+    return this.conv.tasks.length;
+  }
+
+  /** Forget the conversation: the next task starts a fresh Claude Code session with no memory. */
+  newConversation(): void {
+    if (this.running) throw new SmartError('internal', 'Cancel the running task before starting a new conversation.');
+    this.conv = newConversation();
+    this.saveConversation();
+    this.emitConversation();
   }
 
   /** Resolve the pending plan-approval pause with the (possibly edited) plan. */
@@ -99,6 +120,8 @@ export class Pipeline {
     const startedAt = (this.deps.now?.() ?? new Date()).toISOString();
     const summary: TaskSummary = { taskId, ok: false, cancelled: false, dryRun, totals: emptyUsage(), steps: [] };
     let overhead = emptyUsage();
+    const touched: string[] = [];
+    this.lastReply = '';
 
     const emit = this.bus.emit.bind(this.bus);
     const stage = (s: Stage, status: 'active' | 'done' | 'skipped' | 'failed') => emit({ type: 'stage', stage: s, status });
@@ -110,12 +133,14 @@ export class Pipeline {
 
     try {
       emit({ type: 'task:start', taskId, prompt, dryRun });
+      this.emitConversation();
       this.announce();
+      const memory = renderMemory(this.conv);
       const signal = this.ctl.signal;
 
       // 1. classify
       at('classify');
-      const c = await classify(prompt, { config: this.config, cwd: this.cwd, run: this.deps.run, signal });
+      const c = await classify(prompt, { config: this.config, cwd: this.cwd, run: this.deps.run, signal, memory });
       overhead = addUsage(overhead, c.usage);
       this.addCallUsage(c.usage);
       const classification = c.classification;
@@ -130,7 +155,7 @@ export class Pipeline {
       if (wantPlan) {
         at('plan');
         const p = await makePlan(prompt, classification, {
-          config: this.config, cwd: this.cwd, run: this.deps.run, signal, override: this.forced,
+          config: this.config, cwd: this.cwd, run: this.deps.run, signal, override: this.forced, memory,
           projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd),
         });
         overhead = addUsage(overhead, p.usage);
@@ -150,7 +175,7 @@ export class Pipeline {
         stage('execute', 'skipped');
         stage('verify', 'skipped');
         summary.ok = true;
-        return await this.finish(summary, overhead, startedAt, prompt);
+        return await this.finish(summary, { overhead, startedAt, prompt, touched });
       }
 
       // 3. approve (only for multi-step plans the planner produced)
@@ -166,7 +191,6 @@ export class Pipeline {
 
       // 4. execute (+ verify per step)
       at('execute');
-      const touched: string[] = [];
       const active = plan.steps.filter((s) => !s.skipped);
       let failed = false;
       for (const [index, step] of active.entries()) {
@@ -181,7 +205,7 @@ export class Pipeline {
       for (const s of plan.steps.filter((s) => s.skipped)) summary.steps.push(skippedRecord(s));
       summary.ok = !failed;
       stage('execute', failed ? 'failed' : 'done');
-      return await this.finish(summary, overhead, startedAt, prompt);
+      return await this.finish(summary, { overhead, startedAt, prompt, touched });
     } catch (e) {
       if (isCancelled(e)) {
         summary.cancelled = true;
@@ -193,7 +217,7 @@ export class Pipeline {
         emit({ type: 'error', kind: err.kind, message: err.message, hint: err.hint });
       }
       summary.ok = false;
-      return await this.finish(summary, overhead, startedAt, prompt, true);
+      return await this.finish(summary, { overhead, startedAt, prompt, touched, aborted: true });
     } finally {
       this.running = false;
       this.ctl = null;
@@ -213,8 +237,30 @@ export class Pipeline {
     }
   }
 
+  private now(): number {
+    return (this.deps.now?.() ?? new Date()).getTime();
+  }
+
+  /**
+   * Follow-up tasks avoid downgrading to a model with a cold cache (see applyWarmCache). Within one
+   * task every step is routed on its own merits, so a single escalated step cannot drag the rest up.
+   */
+  private warm(decision: RouteDecision): RouteDecision {
+    const followUp = this.conv.tasks.length > 0 && this.conv.sessionId !== null;
+    return this.config.session.resume && followUp ? applyWarmCache(decision, this.conv, this.now(), this.config) : decision;
+  }
+
+  private emitConversation(): void {
+    this.bus.emit({ type: 'conversation', tasks: this.conv.tasks.length, resumed: this.conv.sessionId !== null });
+  }
+
+  private saveConversation(): void {
+    const err = this.deps.conversationStore?.save(this.cwd, this.conv);
+    if (err) this.bus.emit({ type: 'notice', level: 'warn', message: err });
+  }
+
   private routeTask(classification: Classification, text: string): RouteDecision {
-    return route({ classification, text, override: this.forced }, this.config);
+    return this.warm(route({ classification, text, override: this.forced }, this.config));
   }
 
   private routePlan(plan: Plan, classification: Classification): Record<string, RouteDecision> {
@@ -222,7 +268,7 @@ export class Pipeline {
   }
 
   private routeStep(step: PlanStep, classification: Classification): RouteDecision {
-    return route({ classification, text: `${step.title}\n${step.instructions}`, step, override: this.forced }, this.config);
+    return this.warm(route({ classification, text: `${step.title}\n${step.instructions}`, step, override: this.forced }, this.config));
   }
 
   private awaitApproval(): Promise<Plan> {
@@ -261,6 +307,14 @@ export class Pipeline {
     let decision = first;
 
     for (;;) {
+      const cap = this.config.limits.maxBudgetUsdPerTask;
+      if (cap && this.taskUsage.costUsd >= cap) {
+        rec.outcome = 'failed';
+        const msg = `Task budget of $${cap} reached (spent $${this.taskUsage.costUsd.toFixed(2)}); stopping.`;
+        emit({ type: 'notice', level: 'warn', message: msg });
+        emit({ type: 'step:failed', stepId: step.id, error: msg });
+        return rec;
+      }
       rec.attempts += 1;
       rec.tier = tier;
       rec.model = decision.model;
@@ -268,22 +322,37 @@ export class Pipeline {
       emit({ type: 'step:start', stepId: step.id, title: step.title, route: decision, attempt: rec.attempts });
       a.current('execute');
 
+      // One persisted Claude Code session per conversation: steps and follow-up tasks resume it.
+      const resuming = this.config.session.resume && this.conv.sessionId !== null;
+      const sessionId = this.config.session.resume ? (this.conv.sessionId ?? randomUUID()) : undefined;
+      const memory = !resuming && index === 0 ? renderMemory(this.conv) : '';
+
       let ok = false;
       try {
         const res = await runStep({
-          plan, step, index, total, touchedFiles: touched, failure,
+          plan, step, index, total, touchedFiles: touched, failure, memory: memory || undefined,
+          session: sessionId ? { id: sessionId, resume: resuming } : undefined,
+          effort: this.config.runner.effort[tier],
           config: this.config, cwd: this.cwd, run: this.deps.run, route: decision, permissionMode: perm.mode, signal,
-          onOutput: (kind, text) => emit({ type: 'step:output', stepId: step.id, kind, text }),
+          onOutput: (kind, text) => {
+            if (kind === 'text') this.lastReply = text;
+            emit({ type: 'step:output', stepId: step.id, kind, text });
+          },
           onProgress: (p) => emit({
             type: 'tokens', stepId: step.id,
             usage: { ...emptyUsage(), inputTokens: p.inputTokens, outputTokens: p.outputTokens, cacheReadTokens: p.cacheReadTokens },
             sessionTotal: addUsage(this.sessionTotal, { ...emptyUsage(), inputTokens: p.inputTokens, outputTokens: p.outputTokens }),
           }),
         });
+        if (res.text.trim()) this.lastReply = res.text; // the final message is authoritative for follow-up memory
         rec.usage = addUsage(rec.usage, res.usage);
         this.taskUsage = addUsage(this.taskUsage, res.usage);
         emit({ type: 'tokens', stepId: step.id, usage: res.usage, sessionTotal: this.sessionTotal });
         for (const f of res.touched) if (!touched.includes(f)) touched.push(f);
+        if (sessionId) this.conv.sessionId = sessionId;
+        this.conv.lastTier = tier;
+        this.conv.lastCallAt = this.now();
+        this.conv.lastCallAtByTier = { ...this.conv.lastCallAtByTier, [tier]: this.conv.lastCallAt };
 
         // verify
         const skipVerify = classification.complexity === 'trivial' && res.touched.length === 0;
@@ -303,6 +372,13 @@ export class Pipeline {
           rec.outcome = 'cancelled';
           emit({ type: 'step:failed', stepId: step.id, error: 'Cancelled' });
           return rec;
+        }
+        // The saved Claude Code session is gone (cleaned up, other machine): start a new one, carrying our memory.
+        if (e instanceof SmartError && e.kind === 'claude' && resuming && /No conversation found/i.test(e.message)) {
+          this.conv.sessionId = null;
+          emit({ type: 'notice', level: 'warn', message: 'The previous Claude Code session was not found; starting a new one with a summary of the conversation.' });
+          rec.attempts -= 1;
+          continue;
         }
         // Auth / missing CLI / internal problems will not fix themselves: abort the task.
         if (e instanceof SmartError && e.kind !== 'claude') throw e;
@@ -333,7 +409,24 @@ export class Pipeline {
     }
   }
 
-  private async finish(summary: TaskSummary, overhead: Usage, startedAt: string, prompt: string, aborted = false): Promise<TaskSummary> {
+  private async finish(
+    summary: TaskSummary,
+    f: { overhead: Usage; startedAt: string; prompt: string; touched: string[]; aborted?: boolean },
+  ): Promise<TaskSummary> {
+    const { overhead, startedAt, prompt, aborted = false } = f;
+    if (!summary.dryRun && summary.steps.some((s) => s.outcome !== 'skipped')) {
+      recordTask(this.conv, {
+        prompt,
+        complexity: summary.classification?.complexity,
+        summary: summary.plan && summary.plan.steps.length > 1 ? summary.plan.summary : undefined,
+        outcome: summary.cancelled ? 'cancelled' : summary.ok ? 'done' : 'failed',
+        files: f.touched,
+        reply: this.lastReply,
+        at: startedAt,
+      });
+    }
+    this.saveConversation();
+    this.emitConversation();
     summary.totals = this.taskUsage;
     this.sessionDone = addUsage(this.sessionDone, this.taskUsage);
     this.taskUsage = emptyUsage();

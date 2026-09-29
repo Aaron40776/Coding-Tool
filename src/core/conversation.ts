@@ -25,6 +25,7 @@ export interface Conversation {
   sessionId: string | null;
   lastTier?: ModelTier;
   lastCallAt?: number;
+  lastCallAtByTier?: Partial<Record<ModelTier, number>>;
   tasks: TaskMemory[];
 }
 
@@ -88,7 +89,7 @@ export class ConversationStore {
   load(cwd: string): Conversation | null {
     const c = this.read().byDir[cwd];
     if (!c || !Array.isArray(c.tasks)) return null;
-    return { id: c.id, sessionId: c.sessionId ?? null, lastTier: c.lastTier, lastCallAt: c.lastCallAt, tasks: c.tasks };
+    return { id: c.id, sessionId: c.sessionId ?? null, lastTier: c.lastTier, lastCallAt: c.lastCallAt, lastCallAtByTier: c.lastCallAtByTier, tasks: c.tasks };
   }
 
   /** Returns an error message when it could not be saved. */

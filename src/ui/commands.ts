@@ -6,6 +6,7 @@ export type Command =
   | { kind: 'dry' }
   | { kind: 'help' }
   | { kind: 'quit' }
+  | { kind: 'new' }
   | { kind: 'model'; tier: ModelTier | null }
   | { kind: 'error'; message: string }
   | { kind: 'task'; prompt: string };
@@ -28,6 +29,9 @@ export function parseInput(raw: string): Command | null {
     case 'quit':
     case 'exit':
       return { kind: 'quit' };
+    case 'new':
+    case 'clear':
+      return { kind: 'new' };
     case 'model': {
       const arg = (rest[0] ?? '').toLowerCase();
       if (arg === 'auto' || arg === 'off' || arg === '') return { kind: 'model', tier: null };
@@ -43,6 +47,7 @@ export const HELP_TEXT = [
   '  /stats            show cost history',
   '  /model <tier>     force haiku | sonnet | opus (or "auto" to route)',
   '  /dry              toggle dry-run (classify + plan only)',
+  '  /new              start a fresh conversation (forget earlier tasks)',
   '  /help, /quit',
   'Keys: Esc cancel · Tab switch panel · ↑/↓ scroll or select · Ctrl+C quit',
 ].join('\n');

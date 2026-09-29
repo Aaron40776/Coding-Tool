@@ -6,6 +6,7 @@ import { resolveClaudeCommand, runClaude } from './core/claude.js';
 import { expandHome, loadConfig } from './core/config.js';
 import { EventBus } from './core/events.js';
 import { SmartError } from './core/errors.js';
+import { ConversationStore } from './core/conversation.js';
 import { Pipeline } from './core/pipeline.js';
 import { isTier } from './core/router.js';
 import { Tracker } from './core/tracker.js';
@@ -28,6 +29,7 @@ interface Options {
   model?: ModelTier;
   plan: boolean;
   config?: string;
+  continue?: boolean;
 }
 
 async function main() {
@@ -40,6 +42,7 @@ async function main() {
     .option('--model <name>', 'force a model tier for every step: haiku | sonnet | opus', parseModel)
     .option('--no-plan', 'skip the planning step and run the task as a single step')
     .option('--config <path>', 'path to a smart.config.json')
+    .option('-c, --continue', 'continue the previous conversation in this directory')
     .parse();
 
   const opts = program.opts<Options>();
@@ -66,7 +69,12 @@ async function main() {
   const trackerPath = expandHome(config.trackerPath);
   const tracker = new Tracker(trackerPath);
   const bus = new EventBus();
-  const pipeline = new Pipeline(config, bus, cwd, { run: runClaude, tracker });
+  const conversationStore = new ConversationStore(expandHome(config.conversationsPath));
+  const previous = opts.continue ? conversationStore.load(cwd) : null;
+  const startupNotices = opts.continue
+    ? [previous ? `Continuing your previous conversation here (${previous.tasks.length} earlier task${previous.tasks.length === 1 ? '' : 's'}).` : 'No previous conversation in this directory; starting a new one.']
+    : [];
+  const pipeline = new Pipeline(config, bus, cwd, { run: runClaude, tracker, conversation: previous ?? undefined, conversationStore });
 
   let exitCode = 0;
   const altScreen = (on: boolean) => process.stdout.write(on ? '\x1b[?1049h\x1b[H' : '\x1b[?1049l');
@@ -87,6 +95,7 @@ async function main() {
       cwd={cwd}
       version={pkg.version}
       permissionMode={config.runner.permissionMode}
+      startupNotices={startupNotices}
       oneShot={Boolean(task)}
       initial={task ? { prompt: task, dryRun: opts.dryRun, noPlan: !opts.plan, model: opts.model ?? null } : { prompt: '', dryRun: opts.dryRun, noPlan: !opts.plan, model: opts.model ?? null }}
       onExit={(ok) => {

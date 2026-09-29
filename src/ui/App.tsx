@@ -33,6 +33,8 @@ export interface AppProps {
   version: string;
   permissionMode: string;
   initial?: { prompt: string; dryRun?: boolean; noPlan?: boolean; model?: ModelTier | null };
+  /** Info lines shown at startup (e.g. "Continuing your previous conversation"). */
+  startupNotices?: string[];
   /** One-shot mode: exit when the task finishes. */
   oneShot?: boolean;
   onExit?: (ok: boolean) => void;
@@ -40,11 +42,11 @@ export interface AppProps {
 
 const WELCOME = ['Claude Code, routed to the cheapest capable model.', 'Type a task and press Enter, e.g. "make me a snake game".', '/help lists commands.'];
 
-export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permissionMode, initial, oneShot, onExit }: AppProps) {
+export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permissionMode, initial, startupNotices, oneShot, onExit }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [size, setSize] = useState({ cols: stdout.columns ?? 100, rows: stdout.rows ?? 30 });
-  const [state, dispatch] = useReducer(reduce, undefined, initialState);
+  const [state, dispatch] = useReducer(reduce, undefined, () => ({ ...initialState(), chatTasks: pipeline.chatTasks }));
   const [focus, setFocus] = useState<Focus>('input');
   const [view, setView] = useState<'main' | 'stats'>('main');
   const [dryRun, setDryRun] = useState(initial?.dryRun ?? false);
@@ -62,6 +64,9 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
 
   // Subscribe first so no event emitted by the initial task is missed.
   useEffect(() => bus.subscribe(dispatch), [bus]);
+  useEffect(() => {
+    for (const text of startupNotices ?? []) dispatch({ type: 'ui:info', text });
+  }, []);
   useEffect(() => pipeline.setDryRun(dryRun), [pipeline, dryRun]);
   useEffect(() => pipeline.forceModel(forced), [pipeline, forced]);
   useEffect(() => () => pipeline.cancel(), [pipeline]);
@@ -135,6 +140,10 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
         pipeline.cancel();
         onExit?.(true);
         return exit();
+      case 'new':
+        if (pipeline.isRunning) return dispatch({ type: 'notice', level: 'warn', message: 'Cancel the running task (Esc) before starting a new conversation.' });
+        pipeline.newConversation();
+        return dispatch({ type: 'ui:info', text: 'Started a new conversation. Earlier tasks are forgotten.' });
       case 'dry':
         setDryRun(!dryRun);
         return dispatch({ type: 'ui:info', text: `Dry-run ${!dryRun ? 'on: tasks will classify and plan only.' : 'off.'}` });
@@ -148,7 +157,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
 
   // header 1 + pipeline 1 + input 3 + hint 1 = 6, plus one spare row: Ink clears the screen when output fills every row.
   const mainHeight = Math.max(6, size.rows - 7);
-  const tags = [dryRun ? 'dry-run' : '', forced ? `model:${forced}` : 'model:auto'].filter(Boolean);
+  const tags = [dryRun ? 'dry-run' : '', forced ? `model:${forced}` : 'model:auto', state.chatTasks > 0 ? `chat:${state.chatTasks}` : ''].filter(Boolean);
   const hint = state.phase === 'approval' ? '' : busy ? 'Esc cancel · Tab panel' : 'Enter send · Tab panel · /stats /model /dry /help · Ctrl+C quit';
 
   return (

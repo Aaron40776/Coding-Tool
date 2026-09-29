@@ -69,6 +69,21 @@ describe('App', () => {
     await waitFor(() => !lastFrame()!.includes('[dry-run]'));
   });
 
+  it('shows a chat indicator after a task and /new resets it', async () => {
+    const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'trivial' })} />);
+    expect(lastFrame()).not.toContain('[chat:');
+    await type(stdin, 'first task');
+    await waitFor(() => lastFrame()!.includes('[chat:1]'));
+    await type(stdin, '/new');
+    await waitFor(() => lastFrame()!.includes('Started a new conversation'));
+    expect(lastFrame()).not.toContain('[chat:');
+  });
+
+  it('shows startup notices', async () => {
+    const { lastFrame } = render(<App {...makeApp()} startupNotices={['Continuing your previous conversation here (2 earlier tasks).']} />);
+    await waitFor(() => lastFrame()!.includes('Continuing your previous conversation'));
+  });
+
   it('warns about unknown commands and shows help', async () => {
     const { stdin, lastFrame } = render(<App {...makeApp()} />);
     await type(stdin, '/bogus');

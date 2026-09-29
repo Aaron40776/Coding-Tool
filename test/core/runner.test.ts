@@ -66,10 +66,14 @@ describe('buildStepPrompt', () => {
     expect(p).toContain('<file path="a.js">\ncode\n[truncated]');
     expect(p).toContain('<failure>\nTypeError x');
   });
-  it('uses plain task wording for a single-step plan', () => {
+  it('uses the user\'s own words for a single-step task, so follow-ups read naturally', () => {
     const p = buildStepPrompt({ ...base, total: 1 });
-    expect(p).toContain('Complete this task.');
+    expect(p.startsWith('Create src/logic.js')).toBe(true);
     expect(p).not.toContain('Project goal');
+    expect(p).not.toContain('Complete this task');
+  });
+  it('includes conversation memory when given', () => {
+    expect(buildStepPrompt({ ...base, memory: '1. User: "make a game" → done' })).toContain('Context from earlier in this conversation');
   });
 });
 

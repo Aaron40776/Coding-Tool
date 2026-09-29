@@ -32,6 +32,24 @@ For each step, the first rule that applies wins:
 4. **Unusable classifier output**: if the classifier fails or returns malformed JSON, the task runs on **sonnet** and a warning is shown.
 5. **The complexity map**: the table above.
 
+## Conversations and follow-ups
+
+`smart` keeps one conversation per run, like Claude Code:
+
+- **Coding steps** run in a persisted Claude Code session (`--session-id`, then `--resume`) shared by all steps and all follow-up tasks,
+  so the model sees the real history, its own earlier tool calls, and the files it read.
+- **Classifier and planner** are stateless (no tools, no transcript). They get a compact memory instead: for each earlier task, the request,
+  outcome, plan summary, files changed, and your last reply. That is what lets "make it red" be classified and planned correctly.
+- `smart -c` continues the last conversation for the current directory (stored in `~/.smart/conversations.json`); `/new` forgets it.
+- If Claude Code no longer has the saved session, `smart` starts a new one and puts the memory summary in the prompt.
+- `session.resume: false` turns the persisted session off: every step is stateless and gets the memory summary in its prompt instead.
+
+**Model switches and the prompt cache.** Anthropic's prompt cache is per model. Resuming a long session on a *different* model re-reads the whole
+history at full price (I measured $0.18 vs $0.025 for the same follow-up). So for follow-up tasks, while the session is warm
+(`session.cacheTtlSec`, default 300), automatic routing will not downgrade to a model that has no warm cache in this conversation; the reason
+shown says `kept sonnet`. Upgrades, `--model`, your per-step choice on the approval screen and keyword rules always apply, and steps within one plan are always routed on their own merits.
+Set `session.keepWarmTier: false` to disable.
+
 ## Escalation
 
 After a step runs, `smart` runs your checks. If they fail:
@@ -53,6 +71,10 @@ Copy `smart.config.example.json` to `./smart.config.json` (or `~/.smart/smart.co
 - Escalation is your safety net, so an aggressive downgrade costs little when checks exist. Without checks there is no signal to escalate on, so keep Sonnet.
 - Lower `limits.maxPlanSteps`. Every step is a separate Claude Code call, and each call carries Claude Code's own base context.
 - Set `limits.maxBudgetUsdPerStep` to cap a runaway step.
+
+**Cap spending**: `limits.maxBudgetUsdPerTask` stops a task once its total cost reaches that many dollars; `limits.maxBudgetUsdPerStep` caps one step.
+
+**Effort per model**: `"runner": { "effort": { "haiku": "low", "opus": "high" } }` passes `--effort` for that tier (levels: low, medium, high, xhigh, max). Unset uses Claude Code's default.
 
 **Get better results**
 - `"routing": { "large_build": "opus" }` or `"multi_file": "opus"` for harder work.

@@ -10,8 +10,9 @@
     "keywordRules": [{ "match": "architecture|race condition|deadlock", "tier": "opus" }]
   },
   "escalation": { "retriesPerModel": 1, "ladder": ["haiku", "sonnet", "opus"] },
-  "limits": { "maxPlanSteps": 8, "maxContextBytes": 40000, "maxBudgetUsdPerStep": null },
-  "runner": { "permissionMode": "bypassPermissions", "bare": false, "extraArgs": [] },
+  "limits": { "maxPlanSteps": 8, "maxContextBytes": 40000, "maxBudgetUsdPerStep": null, "maxBudgetUsdPerTask": null },
+  "session": { "resume": true, "cacheTtlSec": 300, "keepWarmTier": true },
+  "runner": { "permissionMode": "bypassPermissions", "bare": false, "extraArgs": [], "effort": {} },
   "verify": { "auto": true, "commands": [], "timeoutSec": 300 },
   "trackerPath": "~/.smart/history.json"
 }

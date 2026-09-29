@@ -93,6 +93,11 @@ describe('reduce', () => {
     expect(s.output.length).toBeGreaterThan(0);
   });
 
+  it('tracks how many tasks the conversation remembers', () => {
+    expect(initialState().chatTasks).toBe(0);
+    expect(reduce(initialState(), { type: 'conversation', tasks: 3, resumed: true }).chatTasks).toBe(3);
+  });
+
   it('caps the output log', () => {
     let s = initialState();
     for (let i = 0; i < 500; i++) s = reduce(s, { type: 'step:output', stepId: 's1', kind: 'text', text: String(i) });
@@ -109,6 +114,8 @@ describe('parseInput', () => {
     expect(parseInput('/model Opus')).toEqual({ kind: 'model', tier: 'opus' });
     expect(parseInput('/model auto')).toEqual({ kind: 'model', tier: null });
     expect(parseInput('/quit')).toEqual({ kind: 'quit' });
+    expect(parseInput('/new')).toEqual({ kind: 'new' });
+    expect(parseInput('/clear')).toEqual({ kind: 'new' });
   });
   it('rejects unknown input clearly and ignores blanks', () => {
     expect(parseInput('   ')).toBeNull();

@@ -92,6 +92,12 @@ describe('applyWarmCache', () => {
     expect(d).toMatchObject({ tier: 'sonnet', model: 'sonnet', source: 'session' });
     expect(d.reason).toContain('kept sonnet');
   });
+  it('allows the switch when the cheaper model is warm in this session too', () => {
+    const d = applyWarmCache(haikuDecision(), { lastTier: 'opus', lastCallAt: now - 1000, lastCallAtByTier: { haiku: now - 90_000, opus: now - 1000 } }, now, cfg());
+    expect(d.tier).toBe('haiku');
+    const stale = applyWarmCache(haikuDecision(), { lastTier: 'opus', lastCallAt: now - 1000, lastCallAtByTier: { haiku: now - 400_000 } }, now, cfg());
+    expect(stale.tier).toBe('opus');
+  });
   it('downgrades normally once the cache has gone cold', () => {
     expect(applyWarmCache(haikuDecision(), { lastTier: 'sonnet', lastCallAt: now - 301_000 }, now, cfg()).tier).toBe('haiku');
   });

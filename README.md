@@ -33,6 +33,7 @@ smart --dry-run "add dark mode"      # classify + plan + show the model per step
 smart --model haiku "rename foo to bar in utils.ts"   # force a model tier for every step
 smart --no-plan "refactor the parser"                 # skip planning, run as a single step
 smart --config ./my.config.json "..."
+smart -c                             # continue the previous conversation in this directory (like `claude -c`)
 ```
 
 ### Keys and commands
@@ -45,6 +46,7 @@ smart --config ./my.config.json "..."
 | `/stats` | cost history, per model |
 | `/model <haiku\|sonnet\|opus\|auto>` | force a model |
 | `/dry` | toggle dry-run |
+| `/new` | start a fresh conversation (forget earlier tasks) |
 | `/help`, `/quit`, `Ctrl+C` | help, quit |
 
 **Plan approval.** After planning, review the plan: `↑ ↓` select, `Space` skip a step, `m` pick a model for a step,
@@ -60,8 +62,11 @@ smart --config ./my.config.json "..."
 ## How it saves tokens (and what it does not)
 
 - A cheap model classifies the task, so trivial questions never reach a big model.
-- Each plan step runs in a **fresh, lean prompt**: the step, its acceptance criteria, the files it names, and the list of files changed earlier.
-  There is no growing conversation history.
+- The classifier and planner are stateless, tool-free calls that get only a compact memory of earlier tasks, never the full transcript.
+- Coding steps run in one persisted Claude Code session per conversation, resumed with `--resume`, so **follow-ups have the real history**
+  ("now make it red" works). Claude Code caches that history and compacts it as it grows.
+- While that session's prompt cache is warm, follow-ups are not downgraded to a model whose cache would start cold
+  (re-reading the history at full price costs more than it saves). See [ROUTING.md](ROUTING.md#conversations-and-follow-ups).
 - Work goes to the cheapest model that passes your checks; failures escalate one tier at a time.
 - The planner is instructed to be terse and to add nothing you did not ask for.
 
