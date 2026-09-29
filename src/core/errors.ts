@@ -1,4 +1,4 @@
-export type ErrorKind = 'cli_missing' | 'auth' | 'cancelled' | 'parse' | 'claude' | 'config';
+export type ErrorKind = 'cli_missing' | 'auth' | 'cancelled' | 'parse' | 'claude' | 'config' | 'internal';
 
 export class SmartError extends Error {
   constructor(

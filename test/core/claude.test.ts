@@ -48,6 +48,14 @@ describe('StreamParser', () => {
     expect(progress[0]?.outputTokens).toBe(5);
   });
 
+  it('reports the file written by edit tools but not by reads', () => {
+    const msg = (name: string, id: string) =>
+      JSON.stringify({ type: 'assistant', message: { id, content: [{ type: 'tool_use', name, input: { file_path: '/p/a.ts' } }] } });
+    const evs = new StreamParser().push([msg('Edit', 'a'), msg('Write', 'b'), msg('Read', 'c')].join('\n') + '\n');
+    const tools = evs.filter((e): e is Extract<ClaudeStreamEvent, { kind: 'tool' }> => e.kind === 'tool');
+    expect(tools.map((t) => t.writtenFile)).toEqual(['/p/a.ts', '/p/a.ts', undefined]);
+  });
+
   it('flags error results', () => {
     const [ev] = new StreamParser().push(JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, result: '' }) + '\n');
     expect(ev && ev.kind === 'result' && ev.result.isError).toBe(true);

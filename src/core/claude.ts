@@ -6,7 +6,7 @@ import { emptyUsage, type Usage } from './types.js';
 export type ClaudeStreamEvent =
   | { kind: 'init'; model: string; sessionId: string }
   | { kind: 'text'; text: string }
-  | { kind: 'tool'; name: string; summary: string }
+  | { kind: 'tool'; name: string; summary: string; /** Set for tools that modify a file. */ writtenFile?: string }
   | { kind: 'progress'; inputTokens: number; outputTokens: number; cacheReadTokens: number }
   | { kind: 'result'; result: ClaudeResult };
 
@@ -24,6 +24,8 @@ type Json = Record<string, unknown>;
 const isObj = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
 export function summarizeTool(name: string, input: unknown): string {
   const i = isObj(input) ? input : {};
@@ -121,7 +123,10 @@ export class StreamParser {
       if (block.type === 'text' && str(block.text).trim()) events.push({ kind: 'text', text: str(block.text) });
       // StructuredOutput is an internal tool used for --json-schema; not interesting to show.
       else if (block.type === 'tool_use' && block.name !== 'StructuredOutput') {
-        events.push({ kind: 'tool', name: str(block.name), summary: summarizeTool(str(block.name), block.input) });
+        const name = str(block.name);
+        const input = isObj(block.input) ? block.input : {};
+        const writtenFile = WRITE_TOOLS.has(name) ? str(input.file_path) || str(input.notebook_path) || undefined : undefined;
+        events.push({ kind: 'tool', name, summary: summarizeTool(name, block.input), writtenFile });
       }
     }
     // Claude Code repeats one message per content block, so count each message id once.
@@ -148,6 +153,8 @@ export interface RunClaudeOptions {
   cwd: string;
   signal?: AbortSignal;
   systemPrompt?: string;
+  /** Appended to Claude Code's default system prompt (keeps its tool instructions). */
+  appendSystemPrompt?: string;
   /** JSON schema (object) for structured output. */
   jsonSchema?: object;
   /** Built-in tools to allow. `[]` disables all tools; undefined keeps the default set. */
@@ -165,6 +172,7 @@ export interface RunClaudeOptions {
 export function buildArgs(o: RunClaudeOptions): string[] {
   const args = ['-p', '--model', o.model, '--output-format', 'stream-json', '--verbose', '--no-session-persistence'];
   if (o.systemPrompt !== undefined) args.push('--system-prompt', o.systemPrompt);
+  if (o.appendSystemPrompt) args.push('--append-system-prompt', o.appendSystemPrompt);
   if (o.tools) args.push('--tools', o.tools.join(','));
   if (o.jsonSchema) args.push('--json-schema', JSON.stringify(o.jsonSchema));
   if (o.permissionMode) args.push('--permission-mode', o.permissionMode);
