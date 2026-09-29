@@ -6,7 +6,6 @@ import type { ClaudeResult, RunClaudeFn } from '../../src/core/claude.js';
 import { defaultConfig, type SmartConfig } from '../../src/core/config.js';
 import { ConversationStore } from '../../src/core/conversation.js';
 import { EventBus, type SmartEvent } from '../../src/core/events.js';
-import { SmartError } from '../../src/core/errors.js';
 import { parseClassification } from '../../src/core/classifier.js';
 import { route } from '../../src/core/router.js';
 import type { Checkpointer } from '../../src/core/checkpoint.js';
