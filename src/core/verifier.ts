@@ -61,7 +61,9 @@ const KILL_GRACE_MS = 2000;
 export const defaultExec: ExecFn = (command, { cwd, signal, timeoutMs }) =>
   new Promise<ExecResult>((resolve) => {
     if (signal?.aborted) return resolve({ code: null, output: 'Cancelled.' });
-    const child = spawn(command, { cwd, shell: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CI: '1', FORCE_COLOR: '0' } });
+    const win = process.platform === 'win32';
+    // POSIX: own process group so we can signal the whole tree. Windows: detached would open a console window.
+    const child = spawn(command, { cwd, shell: true, detached: !win, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CI: '1', FORCE_COLOR: '0' } });
     let output = '';
     let timedOut = false;
     let done = false;
@@ -73,7 +75,9 @@ export const defaultExec: ExecFn = (command, { cwd, signal, timeoutMs }) =>
 
     const killGroup = (sig: NodeJS.Signals) => {
       try {
-        if (child.pid) process.kill(-child.pid, sig);
+        if (!child.pid) return;
+        if (win) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => undefined);
+        else process.kill(-child.pid, sig);
       } catch {
         /* already gone */
       }

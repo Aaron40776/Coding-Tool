@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { buildArgs, resolvePermissionMode, runClaude, StreamParser, type ClaudeStreamEvent } from '../../src/core/claude.js';
+import { buildArgs, resolveClaudeCommand, resolvePermissionMode, runClaude, StreamParser, type ClaudeStreamEvent } from '../../src/core/claude.js';
 import { SmartError } from '../../src/core/errors.js';
 
 const fixture = (name: string) => readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8');
@@ -160,5 +160,28 @@ describe('runClaude', () => {
     const ac = new AbortController();
     ac.abort();
     await expect(runClaude({ ...base, signal: ac.signal, spawnImpl: fakeSpawn(() => undefined) })).rejects.toMatchObject({ kind: 'cancelled' });
+  });
+});
+
+describe('resolveClaudeCommand', () => {
+  const win = (files: string[], pathVar = 'C:\\Tools;C:\\Users\\me\\AppData\\Roaming\\npm') =>
+    resolveClaudeCommand('win32', { PATH: pathVar }, (p) => files.includes(p));
+
+  it('uses plain `claude` on Linux and macOS', () => {
+    expect(resolveClaudeCommand('linux', {}, () => false)).toEqual({ cmd: 'claude', prefix: [] });
+  });
+  it('honours SMART_CLAUDE_BIN', () => {
+    expect(resolveClaudeCommand('win32', { SMART_CLAUDE_BIN: 'D:\\c.exe' }, () => false)).toEqual({ cmd: 'D:\\c.exe', prefix: [] });
+  });
+  it('finds claude.exe on the Windows PATH', () => {
+    expect(win(['C:\\Tools\\claude.exe'])).toEqual({ cmd: 'C:\\Tools\\claude.exe', prefix: [] });
+  });
+  it('runs the npm shim\'s cli.js through node instead of the unspawnable .cmd', () => {
+    const dir = 'C:\\Users\\me\\AppData\\Roaming\\npm';
+    const cli = `${dir}\\node_modules\\@anthropic-ai\\claude-code\\cli.js`;
+    expect(win([`${dir}\\claude.cmd`, cli])).toEqual({ cmd: process.execPath, prefix: [cli] });
+  });
+  it('falls back to plain `claude` when nothing is found', () => {
+    expect(win([])).toEqual({ cmd: 'claude', prefix: [] });
   });
 });

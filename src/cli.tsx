@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { Command, InvalidArgumentError } from 'commander';
 import { render } from 'ink';
 import pkg from '../package.json' with { type: 'json' };
-import { runClaude } from './core/claude.js';
+import { resolveClaudeCommand, runClaude } from './core/claude.js';
 import { expandHome, loadConfig } from './core/config.js';
 import { EventBus } from './core/events.js';
 import { SmartError } from './core/errors.js';
@@ -54,7 +54,8 @@ async function main() {
   }
   const { config } = loaded;
 
-  if (spawnSync('claude', ['--version'], { stdio: 'ignore' }).error) {
+  const claude = resolveClaudeCommand();
+  if (spawnSync(claude.cmd, [...claude.prefix, '--version'], { stdio: 'ignore' }).error) {
     const err = new SmartError('cli_missing', 'The `claude` CLI was not found on your PATH.', 'Install Claude Code (https://docs.claude.com/claude-code), then run `claude` once to log in.');
     return fail(err.message, err.hint);
   }

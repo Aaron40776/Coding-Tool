@@ -13,6 +13,10 @@ model only when a step fails. Everything is shown live, with a running cost mete
 
 Requires Node.js 20+ and the [Claude Code CLI](https://docs.claude.com/claude-code) on your `PATH`, already logged in (run `claude` once).
 
+**Windows:** works in Windows Terminal / PowerShell. If PowerShell says *running scripts is disabled*, run
+`Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once (or use `npm.cmd`). `smart` finds `claude.exe`, or the npm
+`claude.cmd` shim; set `SMART_CLAUDE_BIN` to point at a specific executable if detection fails.
+
 ```sh
 npm install -g @aaron40776/smart     # then run: smart
 npx @aaron40776/smart                # or without installing

@@ -32,8 +32,13 @@ describe('gatherFiles', () => {
     writeFileSync(join(outer, 'secret.txt'), 'top secret');
     const proj = join(outer, 'proj');
     mkdirSync(proj);
-    symlinkSync(join(outer, 'secret.txt'), join(proj, 'link.txt'));
-    expect(gatherFiles(proj, ['../secret.txt', join(outer, 'secret.txt'), 'link.txt'], 1000)).toEqual([]);
+    let linked = true;
+    try {
+      symlinkSync(join(outer, 'secret.txt'), join(proj, 'link.txt'));
+    } catch {
+      linked = false; // Windows without symlink privilege: still check traversal below
+    }
+    expect(gatherFiles(proj, ['../secret.txt', join(outer, 'secret.txt'), ...(linked ? ['link.txt'] : [])], 1000)).toEqual([]);
   });
   it('skips binary files and directories', () => {
     const d = dir();

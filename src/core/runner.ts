@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
+
+const slash = (p: string): string => p.split(sep).join('/');
 import type { ClaudeStreamEvent, RunClaudeFn } from './claude.js';
 import type { SmartConfig } from './config.js';
 import type { Plan, PlanStep, RouteDecision, Usage } from './types.js';
@@ -41,7 +43,7 @@ export function gatherFiles(cwd: string, files: string[], maxBytes: number): Fil
       const buf = readFileSync(real);
       if (buf.subarray(0, 8000).includes(0)) continue; // binary
       const slice = buf.subarray(0, budget);
-      out.push({ path: relative(root, resolve(cwd, f)) || f, content: slice.toString('utf8'), truncated: buf.length > slice.length });
+      out.push({ path: slash(relative(root, resolve(cwd, f))) || f, content: slice.toString('utf8'), truncated: buf.length > slice.length });
       budget -= slice.length;
     } catch {
       continue;
@@ -110,8 +112,8 @@ export async function runStep(o: RunStepOptions): Promise<StepRunResult> {
     if (e.kind === 'text') o.onOutput?.('text', e.text);
     else if (e.kind === 'tool') {
       // Show project-relative paths: absolute ones are long and add no information.
-      o.onOutput?.('tool', e.summary.split(`${o.cwd}/`).join(''));
-      if (e.writtenFile) touched.add(relative(o.cwd, resolve(o.cwd, e.writtenFile)) || e.writtenFile);
+      o.onOutput?.('tool', slash(e.summary.split(`${o.cwd}${sep}`).join('').split(`${o.cwd}/`).join('')));
+      if (e.writtenFile) touched.add(slash(relative(o.cwd, resolve(o.cwd, e.writtenFile))) || e.writtenFile);
     } else if (e.kind === 'progress') o.onProgress?.(e);
   };
 

@@ -68,24 +68,27 @@ describe('runChecks', () => {
   });
 });
 
+// Portable across sh and cmd.exe: `sleep` does not exist on Windows.
+const SLEEP = `node -e "setTimeout(()=>{},30000)"`;
+
 describe('defaultExec (real shell)', () => {
   it('captures output and exit codes', async () => {
     const ok = await defaultExec('echo hi', { cwd: '.', timeoutMs: 5000 });
     expect(ok).toMatchObject({ code: 0 });
     expect(ok.output).toContain('hi');
-    const bad = await defaultExec('echo oops 1>&2; exit 3', { cwd: '.', timeoutMs: 5000 });
+    const bad = await defaultExec(`node -e "console.error('oops');process.exit(3)"`, { cwd: '.', timeoutMs: 5000 });
     expect(bad.code).toBe(3);
     expect(bad.output).toContain('oops');
   });
   it('times out and kills a long-running command', async () => {
     const t = Date.now();
-    const r = await defaultExec('sleep 30', { cwd: '.', timeoutMs: 200 });
+    const r = await defaultExec(SLEEP, { cwd: '.', timeoutMs: 200 });
     expect(r.timedOut).toBe(true);
     expect(Date.now() - t).toBeLessThan(5000);
   });
   it('aborts via signal', async () => {
     const ac = new AbortController();
-    const p = defaultExec('sleep 30', { cwd: '.', timeoutMs: 60000, signal: ac.signal });
+    const p = defaultExec(SLEEP, { cwd: '.', timeoutMs: 60000, signal: ac.signal });
     setTimeout(() => ac.abort(), 100);
     const t = Date.now();
     await p;

@@ -1,4 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { authError, cancelled, cliMissing, SmartError } from './errors.js';
 import { emptyUsage, type Usage } from './types.js';
 
@@ -206,9 +208,10 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
     if (opts.signal?.aborted) return reject(cancelled());
 
     const spawnFn = opts.spawnImpl ?? nodeSpawn;
+    const command: ClaudeCommand = opts.binary ? { cmd: opts.binary, prefix: [] } : resolveClaudeCommand();
     let child: ChildProcess;
     try {
-      child = spawnFn(opts.binary ?? 'claude', buildArgs(opts), { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawnFn(command.cmd, [...command.prefix, ...buildArgs(opts)], { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
       return reject(toSpawnError(e));
     }
@@ -277,3 +280,35 @@ function toSpawnError(e: unknown): SmartError {
 }
 
 export type RunClaudeFn = (opts: RunClaudeOptions) => Promise<ClaudeResult>;
+
+export interface ClaudeCommand {
+  cmd: string;
+  /** Arguments that must precede the real ones (e.g. the cli.js path when launching via node). */
+  prefix: string[];
+}
+
+/**
+ * Where to find Claude Code. On Windows `claude` may be `claude.exe` (native installer) or the npm
+ * `claude.cmd` shim; .cmd files cannot be spawned without a shell (and shell quoting would mangle our
+ * arguments), so for the shim we run its `cli.js` with node directly. `SMART_CLAUDE_BIN` overrides all.
+ */
+export function resolveClaudeCommand(
+  platform: string = process.platform,
+  env: Record<string, string | undefined> = process.env,
+  exists: (p: string) => boolean = existsSync,
+): ClaudeCommand {
+  if (env.SMART_CLAUDE_BIN) return { cmd: env.SMART_CLAUDE_BIN, prefix: [] };
+  if (platform !== 'win32') return { cmd: 'claude', prefix: [] };
+  const w = path.win32;
+  for (const dir of (env.PATH ?? env.Path ?? '').split(w.delimiter).filter(Boolean)) {
+    const exe = w.join(dir, 'claude.exe');
+    if (exists(exe)) return { cmd: exe, prefix: [] };
+    if (exists(w.join(dir, 'claude.cmd'))) {
+      for (const rel of [['node_modules', '@anthropic-ai', 'claude-code', 'cli.js'], ['node_modules', '@anthropic-ai', 'claude-code', 'cli.mjs']]) {
+        const cli = w.join(dir, ...rel);
+        if (exists(cli)) return { cmd: process.execPath, prefix: [cli] };
+      }
+    }
+  }
+  return { cmd: 'claude', prefix: [] };
+}
