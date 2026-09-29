@@ -1,2 +1,2 @@
-# Coding-Tool
+# Smart
 Makes coding with Claude more efficient
