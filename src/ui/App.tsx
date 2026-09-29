@@ -48,7 +48,7 @@ export interface AppProps {
   permissionMode: string;
   /** For the savings estimate in /stats and /cost (list prices, editable in config). */
   pricing: import('../core/config.js').SmartConfig['pricing'];
-  initial?: { prompt: string; dryRun?: boolean; noPlan?: boolean; model?: ModelTier | null };
+  initial?: { prompt: string; dryRun?: boolean; noPlan?: boolean; model?: ModelTier | null; resume?: boolean };
   inputHistory?: InputHistory;
   /** Info lines shown at startup (e.g. "Continuing your previous conversation"). */
   startupNotices?: string[];
@@ -99,8 +99,17 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
     pipeline.runTask(prompt, { dryRun, noPlan: opts.noPlan ?? initial?.noPlan }).catch((e: Error) => dispatch({ type: 'notice', level: 'warn', message: e.message }));
   };
 
+  const startResume = () => {
+    const p = pipeline.pendingTask;
+    if (!p) return dispatch({ type: 'notice', level: 'info', message: 'Nothing to resume: the last task finished or never got past planning.' });
+    dispatch({ type: 'ui:user', text: `/resume: ${p.prompt}` });
+    setScroll(0);
+    pipeline.resumeTask().catch((e: Error) => dispatch({ type: 'notice', level: 'warn', message: e.message }));
+  };
+
   useEffect(() => {
-    if (initial?.prompt) startTask(initial.prompt, { noPlan: initial.noPlan });
+    if (initial?.resume) startResume();
+    else if (initial?.prompt) startTask(initial.prompt, { noPlan: initial.noPlan });
   }, []);
 
   useEffect(() => {
@@ -182,6 +191,9 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
       case 'diff':
         void pipeline.diff();
         return;
+      case 'resume':
+        if (pipeline.isRunning) return dispatch({ type: 'notice', level: 'warn', message: 'A task is already running.' });
+        return startResume();
       case 'mode':
         if (cmd.mode === 'show') return dispatch({ type: 'ui:info', text: `Permission mode: ${pipeline.permissionMode}${mode ? ' (set with /mode)' : ' (from config)'}.` });
         setMode(cmd.mode);

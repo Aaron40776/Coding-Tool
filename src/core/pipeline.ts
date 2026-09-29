@@ -5,7 +5,7 @@ import { resolvePermissionMode } from './claude.js';
 import { NoCheckpoints, type Changes, type Checkpointer } from './checkpoint.js';
 import { classify } from './classifier.js';
 import type { SmartConfig } from './config.js';
-import { newConversation, recordTask, renderMemory, type Conversation, type ConversationStore } from './conversation.js';
+import { newConversation, recordTask, renderMemory, type Conversation, type ConversationStore, type PendingTask } from './conversation.js';
 import { EventBus, type Stage } from './events.js';
 import { SmartError, cancelled, isCancelled } from './errors.js';
 import { projectContext, projectFiles } from './files.js';
@@ -44,6 +44,8 @@ export interface TaskOptions {
   noPlan?: boolean;
   /** Skip the approval pause (non-interactive use and tests). */
   autoApprove?: boolean;
+  /** Continue the unfinished task from its first unfinished step (skips classify, plan and approve). */
+  resume?: boolean;
 }
 
 export interface TaskSummary {
@@ -136,6 +138,18 @@ export class Pipeline {
     return this.conv.tasks.length;
   }
 
+  /** The unfinished task `/resume` would continue, if any. */
+  get pendingTask(): PendingTask | null {
+    return this.conv.pending ?? null;
+  }
+
+  /** Continue the last failed or cancelled task from its first unfinished step. */
+  resumeTask(opts: Omit<TaskOptions, 'resume'> = {}): Promise<TaskSummary> {
+    const pending = this.conv.pending;
+    if (!pending) throw new SmartError('internal', 'Nothing to resume: the last task finished or never got past planning.');
+    return this.runTask(pending.prompt, { ...opts, resume: true, autoApprove: true });
+  }
+
   /** Forget the conversation: the next task starts a fresh Claude Code session with no memory. */
   newConversation(): void {
     if (this.running) throw new SmartError('internal', 'Cancel the running task before starting a new conversation.');
@@ -169,6 +183,7 @@ export class Pipeline {
     this.overhead = emptyUsage();
     const touched: string[] = [];
     let startTree: string | null = null;
+    const doneRef: { ids: Set<string> } = { ids: new Set() };
     this.lastReply = '';
 
     const emit = this.bus.emit.bind(this.bus);
@@ -193,53 +208,69 @@ export class Pipeline {
       startTree = dryRun ? null : await this.cp.snapshot();
       const signal = this.ctl.signal;
 
-      // 1. classify
-      at('classify');
-      const c = await classify(prompt, { config: this.config, cwd: this.cwd, run: this.run, signal, memory });
-      this.addCallUsage(c.usage);
-      const classification = c.classification;
-      summary.classification = classification;
-      emit({ type: 'classified', classification, route: this.routeTask(classification, prompt) });
-      if (classification.fallback) emit({ type: 'notice', level: 'warn', message: classification.reason });
-      stage('classify', 'done');
-
-      // 2. plan
-      const wantPlan = !opts.noPlan && (classification.needsPlan || classification.complexity === 'large_build');
+      const resumed = opts.resume ? this.conv.pending : undefined;
+      let classification: Classification;
       let plan: Plan;
-      if (wantPlan) {
-        at('plan');
-        const p = await makePlan(prompt, classification, {
-          config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(), memory,
-          projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd), referenced,
-        });
-        this.addCallUsage(p.usage);
-        plan = p.plan;
-        if (p.warning) emit({ type: 'notice', level: 'warn', message: p.warning });
-        stage('plan', 'done');
-      } else {
-        plan = singleStepPlan(prompt);
-        stage('plan', 'skipped');
-      }
-      summary.plan = plan;
-      emit({ type: 'plan:ready', plan, routes: this.routePlan(plan, classification) });
-
-      if (dryRun) {
-        stage('approve', 'skipped');
-        stage('execute', 'skipped');
-        stage('verify', 'skipped');
-        summary.ok = true;
-        return await this.finish(summary, { startedAt, prompt, touched, startTree });
-      }
-
-      // 3. approve (only for multi-step plans the planner produced)
-      if (wantPlan && plan.steps.length > 1 && !opts.autoApprove) {
-        at('approve');
-        plan = await this.awaitApproval();
+      const doneIds = doneRef.ids;
+      if (resumed) {
+        classification = resumed.classification;
+        plan = resumed.plan;
+        for (const id of resumed.doneStepIds) doneIds.add(id);
+        summary.classification = classification;
         summary.plan = plan;
+        for (const st of ['classify', 'plan', 'approve'] as const) stage(st, 'skipped');
+        const left = plan.steps.filter((x) => !x.skipped && !doneIds.has(x.id)).length;
+        emit({ type: 'notice', level: 'info', message: `Resuming: ${doneIds.size} step${doneIds.size === 1 ? '' : 's'} already done, ${left} to go.` });
+        emit({ type: 'plan:ready', plan, routes: this.routePlan(plan, classification) });
         emit({ type: 'plan:approved', plan });
-        stage('approve', 'done');
       } else {
-        stage('approve', 'skipped');
+        // 1. classify
+        at('classify');
+        const c = await classify(prompt, { config: this.config, cwd: this.cwd, run: this.run, signal, memory });
+        this.addCallUsage(c.usage);
+        classification = c.classification;
+        summary.classification = classification;
+        emit({ type: 'classified', classification, route: this.routeTask(classification, prompt) });
+        if (classification.fallback) emit({ type: 'notice', level: 'warn', message: classification.reason });
+        stage('classify', 'done');
+
+        // 2. plan
+        const wantPlan = !opts.noPlan && (classification.needsPlan || classification.complexity === 'large_build');
+        if (wantPlan) {
+          at('plan');
+          const p = await makePlan(prompt, classification, {
+            config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(), memory,
+            projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd), referenced,
+          });
+          this.addCallUsage(p.usage);
+          plan = p.plan;
+          if (p.warning) emit({ type: 'notice', level: 'warn', message: p.warning });
+          stage('plan', 'done');
+        } else {
+          plan = singleStepPlan(prompt);
+          stage('plan', 'skipped');
+        }
+        summary.plan = plan;
+        emit({ type: 'plan:ready', plan, routes: this.routePlan(plan, classification) });
+
+        if (dryRun) {
+          stage('approve', 'skipped');
+          stage('execute', 'skipped');
+          stage('verify', 'skipped');
+          summary.ok = true;
+          return await this.finish(summary, { startedAt, prompt, touched, startTree });
+        }
+
+        // 3. approve (only for multi-step plans the planner produced)
+        if (wantPlan && plan.steps.length > 1 && !opts.autoApprove) {
+          at('approve');
+          plan = await this.awaitApproval();
+          summary.plan = plan;
+          emit({ type: 'plan:approved', plan });
+          stage('approve', 'done');
+        } else {
+          stage('approve', 'skipped');
+        }
       }
 
       // 4. execute (+ verify per step)
@@ -248,8 +279,10 @@ export class Pipeline {
       const active = plan.steps.filter((s) => !s.skipped);
       let failed = false;
       for (const [index, step] of active.entries()) {
+        if (doneIds.has(step.id)) continue;
         const rec = await this.runOneStep({ plan, step, index, total: active.length, classification, touched, current: (s) => at(s), prompt, cursor, referenced });
         summary.steps.push(rec);
+        if (rec.outcome === 'done') doneIds.add(step.id);
         if (rec.outcome !== 'done') {
           failed = true;
           if (rec.outcome === 'cancelled') throw cancelled();
@@ -259,7 +292,7 @@ export class Pipeline {
       for (const s of plan.steps.filter((s) => s.skipped)) summary.steps.push(skippedRecord(s));
       summary.ok = !failed;
       stage('execute', failed ? 'failed' : 'done');
-      return await this.finish(summary, { startedAt, prompt, touched, startTree });
+      return await this.finish(summary, { startedAt, prompt, touched, startTree, doneIds });
     } catch (e) {
       if (isCancelled(e)) {
         summary.cancelled = true;
@@ -271,7 +304,7 @@ export class Pipeline {
         emit({ type: 'error', kind: err.kind, message: err.message, hint: err.hint });
       }
       summary.ok = false;
-      return await this.finish(summary, { startedAt, prompt, touched, startTree, aborted: true });
+      return await this.finish(summary, { startedAt, prompt, touched, startTree, aborted: true, doneIds: doneRef.ids });
     } finally {
       this.running = false;
       this.ctl = null;
@@ -606,7 +639,7 @@ export class Pipeline {
 
   private async finish(
     summary: TaskSummary,
-    f: { startedAt: string; prompt: string; touched: string[]; startTree: string | null; aborted?: boolean },
+    f: { startedAt: string; prompt: string; touched: string[]; startTree: string | null; aborted?: boolean; doneIds?: Set<string> },
   ): Promise<TaskSummary> {
     const { startedAt, prompt, aborted = false } = f;
     const overhead = this.overhead;
@@ -621,6 +654,15 @@ export class Pipeline {
         reply: this.lastReply,
         at: startedAt,
       });
+    }
+    // A task that stopped after planning can be continued with /resume; a finished one clears that.
+    if (!summary.dryRun) {
+      const unfinished = !summary.ok && summary.plan && summary.classification && summary.steps.some((x) => x.outcome !== 'skipped');
+      if (unfinished) {
+        this.conv.pending = { prompt, classification: summary.classification!, plan: summary.plan!, doneStepIds: [...(f.doneIds ?? [])], at: startedAt };
+      } else if (summary.ok) {
+        delete this.conv.pending;
+      }
     }
     this.saveConversation();
     this.emitConversation();

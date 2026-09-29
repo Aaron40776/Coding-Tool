@@ -174,6 +174,7 @@ describe('parseInput', () => {
     expect(parseInput('/cost')).toEqual({ kind: 'cost' });
     expect(parseInput('/config')).toEqual({ kind: 'config' });
     expect(parseInput('/diff')).toEqual({ kind: 'diff' });
+    expect(parseInput('/resume')).toEqual({ kind: 'resume' });
     expect(parseInput('/mode')).toEqual({ kind: 'mode', mode: 'show' });
     expect(parseInput('/mode plan')).toEqual({ kind: 'mode', mode: 'plan' });
     expect(parseInput('/mode edits')).toEqual({ kind: 'mode', mode: 'acceptEdits' });

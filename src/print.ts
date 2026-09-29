@@ -8,6 +8,8 @@ export interface PrintOptions {
   verbose: boolean;
   dryRun?: boolean;
   noPlan?: boolean;
+  /** Continue the unfinished task instead of starting `prompt`. */
+  resume?: boolean;
 }
 
 export interface PrintIO {
@@ -121,7 +123,7 @@ export async function runPrint(pipeline: Pipeline, bus: EventBus, prompt: string
 
   let summary;
   try {
-    summary = await pipeline.runTask(prompt, { dryRun: opts.dryRun, noPlan: opts.noPlan, autoApprove: true });
+    summary = opts.resume ? await pipeline.resumeTask() : await pipeline.runTask(prompt, { dryRun: opts.dryRun, noPlan: opts.noPlan, autoApprove: true });
   } finally {
     unsubscribe();
     process.off('SIGINT', onSigint);

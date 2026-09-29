@@ -71,6 +71,7 @@ Plans are auto-approved in `-p` mode. It needs no terminal, so it works in pipes
 | `/new` | start a fresh conversation (forget earlier tasks) |
 | `/undo` | revert the file changes of the last task (needs git); repeat to step back further |
 | `/diff` | show what the last task changed |
+| `/resume` | continue a failed or cancelled task from its first unfinished step (`smart --resume` does it at startup, `smart -p --resume` headless) |
 | `/mode <bypass\|edits\|plan\|auto>` | permission mode; `plan` is read-only |
 | `/help`, `/quit`, `Ctrl+C` | help, quit |
 

@@ -12,6 +12,7 @@ export type Command =
   | { kind: 'cost' }
   | { kind: 'config' }
   | { kind: 'diff' }
+  | { kind: 'resume' }
   | { kind: 'mode'; mode: string | null | 'show' }
   | { kind: 'model'; tier: ModelTier | null }
   | { kind: 'error'; message: string }
@@ -49,6 +50,9 @@ export function parseInput(raw: string): Command | null {
       return { kind: 'config' };
     case 'diff':
       return { kind: 'diff' };
+    case 'resume':
+    case 'continue':
+      return { kind: 'resume' };
     case 'mode': {
       const arg = (rest[0] ?? '').toLowerCase();
       if (arg === '') return { kind: 'mode', mode: 'show' };
@@ -81,6 +85,7 @@ export const COMMANDS: { name: string; help: string }[] = [
   { name: '/new', help: 'fresh conversation' },
   { name: '/undo', help: 'revert the last task\'s file changes' },
   { name: '/diff', help: 'show the last task\'s changes' },
+  { name: '/resume', help: 'continue a failed or cancelled task' },
   { name: '/mode', help: 'bypass | edits | plan | auto' },
   { name: '/help', help: 'show help' },
   { name: '/quit', help: 'exit' },
@@ -102,6 +107,7 @@ export const HELP_TEXT = [
   '  /new              start a fresh conversation (forget earlier tasks)',
   '  /undo             revert the file changes of the last task (needs git)',
   '  /diff             show what the last task changed',
+  '  /resume           continue a failed or cancelled task from its first unfinished step',
   '  /mode <m>         permissions: bypass | edits | plan (read-only) | auto',
   '  /help, /quit',
   'Keys: Esc cancel · Tab switch panel · ↑/↓ scroll or select · Ctrl+C quit',

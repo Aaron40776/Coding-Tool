@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { Complexity, ModelTier } from './types.js';
+import type { Classification, Complexity, ModelTier, Plan } from './types.js';
 
 export interface TaskMemory {
   prompt: string;
@@ -12,6 +12,16 @@ export interface TaskMemory {
   files: string[];
   /** The last thing the model said, trimmed: this is what "the other one" or "that" usually refers to. */
   reply: string;
+  at: string;
+}
+
+/** An unfinished task (failed or cancelled after planning) that `/resume` can continue. */
+export interface PendingTask {
+  prompt: string;
+  classification: Classification;
+  plan: Plan;
+  /** Ids of the plan steps that already finished. */
+  doneStepIds: string[];
   at: string;
 }
 
@@ -27,6 +37,7 @@ export interface Conversation {
   lastCallAt?: number;
   lastCallAtByTier?: Partial<Record<ModelTier, number>>;
   tasks: TaskMemory[];
+  pending?: PendingTask;
 }
 
 export const newConversation = (): Conversation => ({ id: randomUUID(), sessionId: null, tasks: [] });
@@ -67,6 +78,12 @@ export function renderMemory(conv: Conversation, maxChars = 3500): string {
   return out.length > maxChars ? out.slice(-maxChars) : out;
 }
 
+function validPending(p: unknown): PendingTask | undefined {
+  const t = p as Partial<PendingTask> | null | undefined;
+  if (!t || typeof t.prompt !== 'string' || !t.plan || !Array.isArray(t.plan.steps) || !t.classification || !Array.isArray(t.doneStepIds)) return undefined;
+  return t as PendingTask;
+}
+
 interface StoreFile {
   version: 1;
   byDir: Record<string, Conversation & { updatedAt: string }>;
@@ -95,7 +112,7 @@ export class ConversationStore {
   load(cwd: string): Conversation | null {
     const c = this.read().byDir[cwd];
     if (!c || !Array.isArray(c.tasks)) return null;
-    return { id: c.id, sessionId: c.sessionId ?? null, lastTier: c.lastTier, lastCallAt: c.lastCallAt, lastCallAtByTier: c.lastCallAtByTier, tasks: c.tasks };
+    return { id: c.id, sessionId: c.sessionId ?? null, lastTier: c.lastTier, lastCallAt: c.lastCallAt, lastCallAtByTier: c.lastCallAtByTier, tasks: c.tasks, pending: validPending(c.pending) };
   }
 
   /** Returns an error message when it could not be saved. */
