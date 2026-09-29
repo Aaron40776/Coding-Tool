@@ -267,3 +267,5 @@ function toSpawnError(e: unknown): SmartError {
     ? cliMissing()
     : new SmartError('claude', `Could not start Claude Code: ${(e as Error).message}`);
 }
+
+export type RunClaudeFn = (opts: RunClaudeOptions) => Promise<ClaudeResult>;

@@ -25,7 +25,7 @@ function keywordTier(text: string, config: SmartConfig): { tier: ModelTier; matc
 
 /**
  * Pure routing function. Precedence: forced override > tier chosen for the step >
- * keyword rule > complexity map.
+ * keyword rule > classifier-fallback (sonnet) > complexity map.
  */
 export function route(
   args: { classification: Classification; text: string; step?: Pick<PlanStep, 'tier'>; override?: ModelTier | null },
@@ -36,6 +36,8 @@ export function route(
   if (step?.tier) return decision(step.tier, config, `${step.tier} chosen for this step`);
   const kw = keywordTier(text, config);
   if (kw) return decision(kw.tier, config, `keyword "${kw.match}" → ${kw.tier}`);
+  // Unusable classifier output always lands on Sonnet, whatever the complexity map says.
+  if (classification.fallback) return decision('sonnet', config, 'classifier output unusable → sonnet');
   const tier = config.routing[classification.complexity];
   return decision(tier, config, `${classification.complexity} → ${tier}`);
 }
