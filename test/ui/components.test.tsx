@@ -8,7 +8,6 @@ import { budget, PlanApproval } from '../../src/ui/components/PlanApproval.js';
 import { PlanChecklist } from '../../src/ui/components/PlanChecklist.js';
 import { StatsView } from '../../src/ui/components/StatsView.js';
 import { LimitsMeter } from '../../src/ui/components/LimitsMeter.js';
-import { defaultConfig } from '../../src/core/config.js';
 import { summarize } from '../../src/core/stats.js';
 import { StepBadge } from '../../src/ui/components/StepBadge.js';
 import { fmtCost, fmtDuration, fmtTokens } from '../../src/ui/format.js';
@@ -584,7 +583,6 @@ describe('PlanApproval: long plans on small terminals (regression)', () => {
 });
 
 describe('StatsView', () => {
-  const pricing = defaultConfig().pricing;
   const now = Date.now();
   const mkTask = (id: string, cost: number, model: string, ok = true) => ({
     id, startedAt: new Date(now - 60_000).toISOString(), prompt: `prompt ${id}`, overhead: { ...emptyUsage(), costUsd: 0.01 }, ok, totals: { ...emptyUsage(), costUsd: cost + 0.01, inputTokens: 1000, outputTokens: 500 },
@@ -592,12 +590,12 @@ describe('StatsView', () => {
   });
 
   it('shows an empty state', () => {
-    expect(render(<StatsView summary={summarize([], { now, pricing })} path="/x/h.json" />).lastFrame()).toContain('No tasks recorded yet');
+    expect(render(<StatsView summary={summarize([], { now })} path="/x/h.json" />).lastFrame()).toContain('No tasks recorded yet');
   });
 
-  it('shows windows, per-model spend, escalations, estimated savings and the priciest tasks', () => {
+  it('shows windows, per-model spend, escalations and the priciest tasks', () => {
     const tasks = [mkTask('a', 0.25, 'sonnet'), mkTask('b', 0.05, 'haiku', false)];
-    const f = render(<StatsView summary={summarize(tasks, { now, pricing })} path="/x/h.json" width={110} />).lastFrame()!;
+    const f = render(<StatsView summary={summarize(tasks, { now })} path="/x/h.json" width={110} />).lastFrame()!;
     expect(f).toContain('Today');
     expect(f).toContain('Last 7d');
     expect(f).toContain('All time');
@@ -606,15 +604,14 @@ describe('StatsView', () => {
     expect(f).toContain('haiku');
     expect(f).toContain('classify · plan · review');
     expect(f).toContain('Escalated 0 of 2 steps');
-    expect(f).toContain('Estimated savings');
-    expect(f).toContain('vs all-opus');
+    expect(f).not.toContain('Estimated savings');
     expect(f).toContain('prompt a');
     expect(f).toContain('/x/h.json');
   });
 
   it('shows the account limits with bars and reset times when known', () => {
     const limits = { at: now, windows: { five_hour: { utilization: 0.74, resetsAt: now / 1000 + 8040 }, seven_day: { utilization: 0.18, resetsAt: now / 1000 + 3 * 86400 } } };
-    const f = render(<StatsView summary={summarize([], { now, pricing })} limits={limits} nowMs={now} path="p" width={100} />).lastFrame()!;
+    const f = render(<StatsView summary={summarize([], { now })} limits={limits} nowMs={now} path="p" width={100} />).lastFrame()!;
     expect(f).toContain('Your Claude account');
     expect(f).toContain('5h');
     expect(f).toContain('74%');

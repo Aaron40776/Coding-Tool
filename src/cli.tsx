@@ -171,7 +171,6 @@ async function main() {
       cwd={cwd}
       version={pkg.version}
       permissionMode={config.runner.permissionMode}
-      pricing={config.pricing}
       startupNotices={startupNotices}
       inputHistory={new InputHistory(expandHome(config.historyPath))}
       oneShot={Boolean(task) || Boolean(opts.resume)}

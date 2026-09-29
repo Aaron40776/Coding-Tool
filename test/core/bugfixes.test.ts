@@ -130,11 +130,10 @@ describe('config', () => {
     writeFileSync(join(d, 'smart.config.json'), JSON.stringify(json));
     return d;
   };
-  it('accepts overriding a single model or a single price', () => {
-    const { config } = loadConfig(cfgDir({ models: { opus: 'claude-opus-custom' }, pricing: { opus: { input: 15 } } }));
+  it('accepts overriding a single model, and an old `pricing` setting is ignored without a warning', () => {
+    const { config, warnings } = loadConfig(cfgDir({ models: { opus: 'claude-opus-custom' }, pricing: { opus: { input: 15 } } }));
+    expect(warnings).toEqual([]);
     expect(config.models).toEqual({ haiku: 'haiku', sonnet: 'sonnet', opus: 'claude-opus-custom' });
-    expect(config.pricing.opus).toEqual({ input: 15, output: 25 });
-    expect(config.pricing.sonnet).toEqual({ input: 3, output: 15 });
   });
   it('warns about unknown (probably misspelled) settings, top level and nested', () => {
     const { warnings } = loadConfig(cfgDir({ routng: {}, runner: { permisionMode: 'acceptEdits' }, review: { enabled: true } }));

@@ -62,7 +62,7 @@ Plans are auto-approved in `-p` mode. It needs no terminal, so it works in pipes
 | `Enter` | send |
 | `Esc` | cancel the running step (or close a view) |
 | `Tab` | switch panel (input / plan / output); `↑ ↓` select or scroll |
-| `/stats` | usage history: today / 7 days / all time, per-model spend, escalations, estimated savings |
+| `/stats` | usage history: today / 7 days / all time, per-model spend, escalations, priciest tasks |
 | `/usage` | your Claude account limits (5-hour and 7-day windows) with reset countdowns |
 | `/cost` | what this session spent, by model |
 | `/config` | the effective routing and safety settings |
@@ -98,9 +98,8 @@ Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prom
 - **Limit-aware routing.** When a window reaches 90% (`usage.downshiftAt`), automatic routing and planning stop choosing Opus (which burns the
   allowance fastest) and use Sonnet instead, and the reason is shown. `--model`, your per-step choices and escalations after a failure are not affected.
   Set `"usage": { "downshiftAt": 0 }` to turn this off.
-- **`/stats`** shows spend for today, the last 7 days and all time, cost per model, how often steps escalated, what classify/plan/review cost, your priciest tasks,
-  and an **estimated saving** versus running everything on Sonnet or Opus. Real costs are what Claude Code reports; the comparison prices the same tokens at
-  list prices from `pricing` in your config, so treat it as an estimate. On tiny tasks the overhead can outweigh the saving, and `/stats` says so.
+- **`/stats`** shows spend for today, the last 7 days and all time, cost per model, how often steps escalated, what classify/plan/review cost, and your priciest tasks.
+  Costs are what Claude Code reports, not estimates.
 
 ## Quality and safety
 
@@ -116,6 +115,8 @@ Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prom
 ## How it saves tokens (and what it does not)
 
 - A cheap model classifies the task, so trivial questions never reach a big model.
+- Pure small talk ("hey", "thanks") skips even that: one short tool-less Haiku call, a few seconds. Classify, plan and review calls also start Claude Code without hooks,
+  plugins, MCP servers or skills (`"runner": { "leanCalls": false }` turns that off), because each of those slows every start-up and tool-less calls cannot use them.
 - The classifier and planner are stateless, tool-free calls that get only a compact memory of earlier tasks, never the full transcript.
 - Coding steps run in one persisted Claude Code session per conversation, resumed with `--resume`, so **follow-ups have the real history**
   ("now make it red" works). Claude Code caches that history and compacts it as it grows.
@@ -170,8 +171,6 @@ npm run dev        # run from source
 Tests mock Claude (`vitest`, `ink-testing-library`). Run the CLI wrapper against the real `claude` with `npm run dev`.
 
 - `SMART_E2E=1 npm test -- test/e2e` runs one tiny task through the real `claude` CLI on Haiku (a few cents) and checks the file, the cost and the saved history.
-- `npm run bench` compares plain Sonnet, plain Opus and `smart` on six small tasks with checkable outcomes. It prints the tasks and a rough cost estimate and **runs nothing** until you add `--run`
-  (`npm run bench -- --run --tasks fizzbuzz,fix-bug --variants sonnet,smart`). It writes `bench-results.md`. The savings claim is not benchmarked yet: run it and share the numbers.
 
 ## License
 

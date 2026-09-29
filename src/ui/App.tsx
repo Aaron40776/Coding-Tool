@@ -46,8 +46,6 @@ export interface AppProps {
   cwd: string;
   version: string;
   permissionMode: string;
-  /** For the savings estimate in /stats and /cost (list prices, editable in config). */
-  pricing: import('../core/config.js').SmartConfig['pricing'];
   initial?: { prompt: string; dryRun?: boolean; noPlan?: boolean; model?: ModelTier | null; resume?: boolean };
   inputHistory?: InputHistory;
   /** Info lines shown at startup (e.g. "Continuing your previous conversation"). */
@@ -59,7 +57,7 @@ export interface AppProps {
 
 const WELCOME = ['Claude Code, routed to the cheapest capable model.', 'Type a task and press Enter, e.g. "make me a snake game".', '/help lists commands.'];
 
-export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permissionMode, pricing, initial, startupNotices, inputHistory, oneShot, onExit }: AppProps) {
+export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permissionMode, initial, startupNotices, inputHistory, oneShot, onExit }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [size, setSize] = useState({ cols: stdout.columns ?? 100, rows: stdout.rows ?? 30 });
@@ -181,7 +179,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
         return dispatch({ type: 'ui:info', text: usageLines(state.limits, Date.now()).join('\n') });
       case 'cost': {
         const mine = tracker.load().filter((t) => Date.parse(t.startedAt) >= sessionStart.current);
-        return dispatch({ type: 'ui:info', text: costLines(summarize(mine, { now: Date.now(), pricing })).join('\n') });
+        return dispatch({ type: 'ui:info', text: costLines(summarize(mine, { now: Date.now() })).join('\n') });
       }
       case 'config':
         return dispatch({ type: 'ui:info', text: pipeline.describe().join('\n') });
@@ -256,7 +254,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
       {state.phase === 'approval' && state.plan ? (
         <PlanApproval plan={state.plan} routes={state.routes} onApprove={(p) => pipeline.approvePlan(p)} onCancel={() => pipeline.cancel()} height={mainHeight} width={size.cols} />
       ) : view === 'stats' ? (
-        <StatsView summary={summarize(tracker.load(), { now: Date.now(), pricing })} limits={state.limits} path={trackerPath} height={mainHeight} width={size.cols} />
+        <StatsView summary={summarize(tracker.load(), { now: Date.now() })} limits={state.limits} path={trackerPath} height={mainHeight} width={size.cols} />
       ) : (
         <Box height={mainHeight}>
           <Box width="40%" flexShrink={0} flexDirection="column">

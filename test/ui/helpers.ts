@@ -43,5 +43,5 @@ export function makeApp(opts: { complexity?: Complexity; executor?: RunClaudeFn;
   const tracker = new Tracker(trackerPath);
   const bus = new EventBus();
   const pipeline = new Pipeline(config, bus, dir, { run, tracker, listFiles: () => [], uid: 1000 });
-  return { pipeline, bus, tracker, trackerPath, cwd: dir, config, pricing: config.pricing, version: '0.0.0-test', permissionMode: 'acceptEdits' };
+  return { pipeline, bus, tracker, trackerPath, cwd: dir, config, version: '0.0.0-test', permissionMode: 'acceptEdits' };
 }

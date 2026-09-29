@@ -2,9 +2,11 @@
 
 ## Unreleased
 
+- Speed: a greeting ("hey", "thanks") is answered by one short tool-less Haiku call instead of classify + a full Claude Code session (about 8 s down to 3 s here, and far more where plugins, hooks or MCP servers slow every `claude` start-up). Classify, plan and review calls also start `claude` lean (no hooks, plugins, MCP servers or skills; `runner.leanCalls`, on by default, with an automatic fallback if that breaks login).
+- Removed the estimated-savings comparison from `/stats` and `/cost`, the `pricing` setting (old configs that still have it load without a warning) and the `npm run bench` harness: they compared list prices, not real usage.
+- Repo renamed to `Smart`: URLs, badge and clone instructions updated.
 - `/resume` and `smart --resume` (also `smart -p --resume`): continue a failed or cancelled task from its first unfinished step, without re-classifying or re-planning. The approved plan and finished steps are saved with the conversation.
 - Plan review: add (`a`), delete (`d`) and reorder (`J`/`K`) steps; multi-line instructions (`Alt+Enter` or `\` + `Enter`).
-- `npm run bench`: opt-in benchmark of plain Sonnet, plain Opus and `smart` (prints an estimate first, runs only with `--run`).
 - `SMART_E2E=1` real-CLI smoke test.
 - README: install from a clone (the package is not on npm yet).
 
@@ -14,7 +16,7 @@ First complete release: a Claude Code wrapper with smart model routing.
 
 - Classify (Haiku) → plan (Opus, only when worthwhile) → route each step to the cheapest capable model (Sonnet by default) → verify → escalate on failure.
 - Conversation continuity: one persisted Claude Code session per conversation (`--resume`), `-c` to continue, `/new` to reset, self-healing if the session is gone.
-- Usage: `/stats` (with estimated savings), `/usage` (5h/7d account windows), `/cost`, live header meter, limit-aware routing, `--budget`.
+- Usage: `/stats`, `/usage` (5h/7d account windows), `/cost`, live header meter, limit-aware routing, `--budget`.
 - Quality and safety: acceptance review, git shadow checkpoints with `/diff` and `/undo`, permission modes (`/mode`), config warnings.
 - QOL: `@file` mentions with completion, multi-line input, persistent prompt history, slash-command completion, `smart init`.
 - Headless `-p` mode with `--output-format json`, stdin tasks and stable exit codes (0/1/130).
