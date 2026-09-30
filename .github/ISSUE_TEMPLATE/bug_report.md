@@ -13,7 +13,7 @@ labels: bug
 2.
 
 **Environment**
-- OS / terminal (e.g. Windows Terminal, iTerm2):
+- Windows version and terminal (e.g. Windows 11, Windows Terminal with PowerShell 7):
 - Node.js version (`node --version`):
 - Claude Code version (`claude --version`):
 - smart version (`smart --version`):

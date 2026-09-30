@@ -62,7 +62,7 @@ If the classifier output is unusable the rater works from the text alone, with S
   so the model sees the real history, its own earlier tool calls, and the files it read.
 - **Classifier and planner** are stateless (no tools, no transcript). They get a compact memory instead: for each earlier task, the request,
   outcome, plan summary, files changed, and your last reply. That is what lets "make it red" be classified and planned correctly.
-- `smart -c` continues the last conversation for the current directory (stored in `~/.smart/conversations.json`); `/new` forgets it.
+- `smart -c` continues the last conversation for the current directory (stored in `%USERPROFILE%\.smart\conversations.json`); `/new` forgets it.
 - If Claude Code no longer has the saved session, `smart` starts a new one and puts the memory summary in the prompt.
 - `session.resume: false` turns the persisted session off: every step is stateless and gets the memory summary in its prompt instead.
 - A session that has grown past `session.maxContextTokens` (default 80k tokens) is replaced by a fresh one at the next task, which gets the
@@ -106,7 +106,7 @@ A question that changed no files is not verified, and neither is a change that o
 
 ## Tuning
 
-`smart init` writes a small `./smart.config.json`, `smart init --global` one in `~/.smart/` for all your projects. Put in only the settings you change
+`smart init` writes a small `./smart.config.json`, `smart init --global` one in `%USERPROFILE%\.smart\` for all your projects. Put in only the settings you change
 (every setting and its default: `smart.config.example.json`); the rest keeps the defaults, including future improvements. A project's file applies on top
 of your global one, key by key, so it only needs what differs. `"//"` keys are notes and ignored. `--config <path>` takes the project file's place.
 
@@ -120,8 +120,8 @@ of your global one, key by key, so it only needs what differs. `"//"` keys are n
 
 **Effort**: chosen per step by the rater (see above; `runner.autoEffort`, on by default). Pin a level per model with `"runner": { "effort": { "haiku": "low", "opus": "high" } }` (levels: low, medium, high, xhigh, max); a pinned level always wins. `"autoEffort": false` leaves Claude Code's default. The Opus planner runs at `high` for big or hard-looking requests and `medium` otherwise.
 
-**Faster start-up**: `runner.leanCalls` (on by default) starts the tool-less classify, plan and review calls without your hooks, plugins, MCP servers and skills. `SMART_DEBUG=1` writes one line per
-`claude` call to `~/.smart/debug.log` (start-up, first text, total) so you can see whether a slow call is Claude Code's own start-up or the model.
+**Faster start-up**: `runner.leanCalls` (on by default) starts the tool-less classify, plan and review calls without your hooks, plugins, MCP servers and skills. `$env:SMART_DEBUG=1` writes one line per
+`claude` call to `%USERPROFILE%\.smart\debug.log` (start-up, first text, total) so you can see whether a slow call is Claude Code's own start-up or the model.
 
 **Get better results**
 - `"routing": { "large_build": "opus" }` or `"multi_file": "opus"` for harder work.
