@@ -40,7 +40,13 @@ const HARD: Rule[] = [
 
 /** Routine, low-risk changes. */
 const EASY: Rule[] = [
-  { label: 'trivial edit', re: /\b(typos?|spelling|renam\w+|comments?|docstrings?|log(ging)? (line|statement|message)|console\.log|bump\w*|version number|wording|copy( text)?|labels?|colou?rs?|fonts?|padding|margins?|whitespace|formatting|lint (error|warning)s?|unused (import|variable|code)s?)\b/i, weight: -0.2 },
+  // Only phrases that are clearly a small change. Bare nouns are not: "a comment system", "copy files", "font loading" and
+  // "permission labels" are features, and "rename across the codebase" is still cross-cutting.
+  {
+    label: 'trivial edit',
+    re: /\b(typos?|spelling|renam(e|ing)|docstrings?|console\.log|log(ging)? (line|statement|message)|version number|bump (the )?version|whitespace|formatting|lint (error|warning)s?|unused (import|variable|code)s?)\b|\b(change|update|fix|tweak|adjust|set)\b[^.\n]{0,30}\b(colou?rs?|fonts?|labels?|wording|copy|padding|margins?|spacing)\b|\badd (a |an |some )?(short |brief |code )?comments?( to| above| explaining| for|\.|,|$)/i,
+    weight: -0.2,
+  },
   { label: 'small scope', re: /\b(one[- ]liner|one[- ]line|single line|quick(ly)?|simple|minor|tiny|trivial|straightforward|boilerplate|scaffold\w*)\b/i, weight: -0.1 },
 ];
 
@@ -54,7 +60,7 @@ const STACK = /(^\s+at .+\(.+:\d+(:\d+)?\)|Traceback \(most recent call last\)|^
 export function extractFeatures(input: { text: string; files?: string[]; criteria?: number; step?: boolean }): Features {
   const text = input.text;
   const words = (text.match(/\S+/g) ?? []).length;
-  const mentioned = new Set([...(input.files ?? []), ...(text.match(/(?:^|\s)@[^\s@]+/g) ?? []).map((m) => m.trim())]);
+  const mentioned = new Set([...(input.files ?? []), ...(text.match(/(?:^|\s)@[^\s@]+/g) ?? []).map((m) => m.trim().replace(/^@/, ''))]);
   // "add X and Y, then Z" and numbered lists are several pieces of work in one request
   const parts = 1 + (text.match(/(\band\b|\bthen\b|\balso\b|;|\n\s*(\d+[.)]|[-*])\s)/gi) ?? []).length;
 

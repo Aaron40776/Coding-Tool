@@ -15,8 +15,9 @@ export interface Classification {
   fallback?: boolean;
 }
 
-/** How hard Claude Code thinks (`--effort`). */
-export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+/** How hard Claude Code thinks (`--effort`), lowest first. */
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type Effort = (typeof EFFORTS)[number];
 
 /** How much reasoning a piece of work needs, independent of its size. */
 export type Difficulty = 'easy' | 'normal' | 'hard';

@@ -3,9 +3,10 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { SmartError } from './errors.js';
+import { EFFORTS } from './types.js';
 
 const tier = z.enum(['haiku', 'sonnet', 'opus']);
-const effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+const effort = z.enum(EFFORTS);
 
 const validRegex = (s: string): boolean => {
   try {

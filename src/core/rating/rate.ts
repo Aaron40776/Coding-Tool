@@ -1,5 +1,5 @@
 import type { SmartConfig } from '../config.js';
-import type { Classification, Difficulty, Effort, ModelTier } from '../types.js';
+import { EFFORTS, type Classification, type Difficulty, type Effort, type ModelTier } from '../types.js';
 import { extractFeatures, localScore, type Signal } from './features.js';
 import { adjustRung, type History } from './learn.js';
 
@@ -71,6 +71,8 @@ export interface RateInput {
   files?: string[];
   config: SmartConfig;
   history?: History;
+  /** Overrides the floor that would come from the classification (used by `smart --rate`, which has no classifier). */
+  floorTier?: ModelTier;
 }
 
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n));
@@ -108,7 +110,7 @@ export function rateTask(i: RateInput): Rating {
 
   const bias = BIAS[i.config.routing.optimize];
   const adjusted = score - bias;
-  const floorTier = i.classification && !i.classification.fallback ? i.config.routing[i.classification.complexity] : 'sonnet';
+  const floorTier = i.floorTier ?? (i.classification && !i.classification.fallback ? i.config.routing[i.classification.complexity] : 'sonnet');
   const floor = FLOOR_INDEX[floorTier];
   const raw = THRESHOLDS.filter((t) => adjusted >= t).length;
   let index = Math.max(raw, floor);
@@ -121,7 +123,9 @@ export function rateTask(i: RateInput): Rating {
   const signals = local.contributions.map(fmt);
   const reasonBits = [...local.contributions.filter((c) => Math.abs(c.weight) >= 0.05).map((c) => c.label), opinion?.why].filter(Boolean);
   // Verdict first: the plan panel cuts long reasons at the end, and the choice matters more than the explanation.
-  const summary = `${rungLabel(rung)} · rated ${score.toFixed(2)} · ${Math.round(confidence * 100)}% sure (${reasonBits.join(', ') || 'no strong signals'})${learned.note ? `; ${learned.note}` : ''}`;
+  // Effort is only named when it will be applied.
+  const shown = i.config.runner.autoEffort ? rungLabel(rung) : rung.tier;
+  const summary = `${shown} · rated ${score.toFixed(2)} · ${Math.round(confidence * 100)}% sure (${reasonBits.join(', ') || 'no strong signals'})${learned.note ? `; ${learned.note}` : ''}`;
   const detail = [
     `local signals: ${signals.length ? signals.join(', ') : 'none'} → ${local.score.toFixed(2)}`,
     opinion ? `classifier/planner: ${opinion.why} → ${opinion.score.toFixed(2)}` : 'classifier/planner: not available, local signals only',
@@ -140,11 +144,10 @@ export function effortAt(tier: ModelTier, score: number): Effort | undefined {
   return score < THRESHOLDS[4] ? 'medium' : score < THRESHOLDS[5] ? 'high' : 'xhigh';
 }
 
-const ORDER: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-/** One level up, capped where it stops paying off: Sonnet at high, Opus at xhigh. */
+/** One level up, capped where it stops paying off: Sonnet at high, Opus at xhigh. A pinned level above the cap is left alone. */
 export function bumpEffort(effort: Effort | undefined, tier: ModelTier): Effort | undefined {
   if (!effort || tier === 'haiku') return effort;
-  const cap = tier === 'sonnet' ? 'high' : 'xhigh';
-  const next = ORDER[Math.min(ORDER.indexOf(effort) + 1, ORDER.indexOf(cap))]!;
-  return ORDER.indexOf(effort) >= ORDER.indexOf(cap) ? effort : next;
+  const at = EFFORTS.indexOf(effort);
+  const cap = EFFORTS.indexOf(tier === 'sonnet' ? 'high' : 'xhigh');
+  return at >= cap ? effort : EFFORTS[at + 1];
 }

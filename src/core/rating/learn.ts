@@ -33,7 +33,8 @@ export function buildHistory(tasks: TaskRecord[], nowMs = Date.now()): History {
   for (const t of tasks) {
     if (nowMs - Date.parse(t.startedAt) > WINDOW_MS) continue;
     for (const s of t.steps) {
-      if (!s.rated || (s.outcome !== 'done' && s.outcome !== 'failed')) continue;
+      // A step that never ran (attempts 0: the task budget was already spent) says nothing about the rung.
+      if (!s.rated || s.attempts === 0 || (s.outcome !== 'done' && s.outcome !== 'failed')) continue;
       const key = statsKey(s.rated.tier, s.rated.effort, s.rated.score);
       const cur = h.get(key) ?? { n: 0, ok: 0 };
       cur.n += 1;
@@ -44,13 +45,13 @@ export function buildHistory(tasks: TaskRecord[], nowMs = Date.now()): History {
   return h;
 }
 
-export interface Rung {
+export interface RungLike {
   tier: string;
   effort?: string;
 }
 
 /** Returns the index of the rung to use after applying what history says about `rungs[idx]`. */
-export function adjustRung(idx: number, floorIdx: number, score: number, rungs: readonly Rung[], history: History | undefined): { idx: number; note?: string } {
+export function adjustRung(idx: number, floorIdx: number, score: number, rungs: readonly RungLike[], history: History | undefined): { idx: number; note?: string } {
   const rung = rungs[idx];
   const stats = rung && history?.get(statsKey(rung.tier, rung.effort, score));
   if (!rung || !stats) return { idx };

@@ -13,7 +13,7 @@ import { resolveMentions } from './mentions.js';
 import { describeConfig } from './describe.js';
 import { effortFor, planEffort } from './effort.js';
 import { buildHistory, type History } from './rating/learn.js';
-import { rateTask } from './rating/rate.js';
+import { effortAt, rateTask } from './rating/rate.js';
 import { CHAT_SYSTEM, isSmallTalk } from './smalltalk.js';
 import { makePlan, singleStepPlan } from './planner.js';
 import { applyWarmCache, plannerTier, route } from './router.js';
@@ -91,6 +91,8 @@ export class Pipeline {
   private leanOk = true;
   /** How each rung has fared on your recent steps; the rater nudges towards what worked. Refreshed at the start of every task. */
   private history: History | undefined;
+  /** Files the current request refers to with @path: they count towards how big the work is. */
+  private taskFiles: string[] = [];
   /** The task currently running, so a shutdown can wait for its state to be saved (see `settle`). */
   private current: Promise<unknown> | null = null;
   private bgSnapshot: Promise<string | null> | null = null;
@@ -258,6 +260,7 @@ export class Pipeline {
       this.announce();
       const memory = renderMemory(this.conv);
       const referenced = resolveMentions(this.cwd, prompt, this.config.limits.maxContextBytes);
+      this.taskFiles = referenced.map((f) => f.path);
       if (referenced.length) emit({ type: 'notice', level: 'info', message: `Using ${referenced.length} referenced file${referenced.length === 1 ? '' : 's'}: ${referenced.map((f) => f.path).join(', ')}` });
       // Greetings skip the git snapshot, classifier and Claude Code session entirely.
       if (!dryRun && !opts.resume && !this.forced && !referenced.length && isSmallTalk(prompt)) return await this.respond(prompt, summary, { startedAt, memory, at, stage, touched });
@@ -292,7 +295,7 @@ export class Pipeline {
         this.addCallUsage(c.usage);
         classification = c.classification;
         summary.classification = classification;
-        emit({ type: 'classified', classification, route: this.routeTask(classification, prompt, referenced.map((f) => f.path)) });
+        emit({ type: 'classified', classification, route: this.routeTask(classification, prompt) });
         if (classification.fallback) emit({ type: 'notice', level: 'warn', message: classification.reason });
         stage('classify', 'done');
 
@@ -302,10 +305,10 @@ export class Pipeline {
         }
 
         // 2. plan
-        const taskScore = rateTask({ text: prompt, classification, files: referenced.map((f) => f.path), config: this.config, history: this.history }).score;
         const wantPlan = !opts.noPlan && (classification.needsPlan || classification.complexity === 'large_build');
         if (wantPlan) {
           at('plan');
+          const taskScore = rateTask({ text: prompt, classification, files: this.taskFiles, config: this.config, history: this.history }).score;
           const p = await makePlan(prompt, classification, {
             config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(classification, taskScore), memory, effort: planEffort(classification.complexity, this.config, taskScore), score: taskScore,
             projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd), referenced,
@@ -472,7 +475,9 @@ export class Pipeline {
   private warm(decision: RouteDecision): RouteDecision {
     const pressured = applyLimitPressure(decision, this.limits, this.config);
     const followUp = this.conv.tasks.length > 0 && this.conv.sessionId !== null;
-    return this.config.session.resume && followUp ? applyWarmCache(pressured, this.conv, this.now(), this.config) : pressured;
+    const out = this.config.session.resume && followUp ? applyWarmCache(pressured, this.conv, this.now(), this.config) : pressured;
+    // If a rule swapped the model, the rated effort belongs to the model that is no longer used.
+    return out.tier !== decision.tier && out.score !== undefined ? { ...out, effort: effortAt(out.tier, out.score) } : out;
   }
 
   /** While an account usage window is nearly used up, plan with sonnet instead of the (heavier) configured planner model. */
@@ -522,19 +527,27 @@ export class Pipeline {
     }
   }
 
-  private routeTask(classification: Classification, text: string, files?: string[]): RouteDecision {
+  private routeTask(classification: Classification, text: string, files: string[] = this.taskFiles): RouteDecision {
     return this.warm(route({ classification, text, override: this.forced, files, history: this.history }, this.config));
   }
 
   private routePlan(plan: Plan, classification: Classification): Record<string, RouteDecision> {
-    return Object.fromEntries(plan.steps.map((s) => [s.id, this.routeStep(s, classification, plan.steps.length > 1)]));
+    return Object.fromEntries(plan.steps.map((s) => [s.id, this.routeStep(s, classification, this.inPlan(plan, s))]));
+  }
+
+  /**
+   * Whether a step is one of a written plan (rated on its own, with the planner's difficulty) rather than the whole request.
+   * A single step the planner wrote and rated counts as a plan step; the fallback single step (no plan) does not.
+   */
+  private inPlan(plan: Plan, step: PlanStep): boolean {
+    return plan.steps.length > 1 || step.difficulty !== undefined;
   }
 
   /** A step of a written plan is rated on its own text and the planner's difficulty; a lone task on the request itself. */
   private routeStep(step: PlanStep, classification: Classification, inPlan = true): RouteDecision {
     // A lone task is rated on the user's own words (its step title is boilerplate and would hide a leading question word).
     const text = inPlan ? `${step.title}\n${step.instructions}` : step.instructions;
-    return this.warm(route({ classification, text, step, solo: !inPlan, override: this.forced, history: this.history }, this.config));
+    return this.warm(route({ classification, text, step, solo: !inPlan, override: this.forced, files: inPlan ? undefined : this.taskFiles, history: this.history }, this.config));
   }
 
   private awaitApproval(): Promise<Plan> {
@@ -644,8 +657,10 @@ export class Pipeline {
     const emit = this.bus.emit.bind(this.bus);
     const signal = this.ctl!.signal;
     const perm = resolvePermissionMode(this.permissionMode, this.deps.uid ?? process.getuid?.());
-    const first = this.routeStep(step, classification, plan.steps.length > 1);
-    const startEffort = effortFor({ decision: first, tier: first.tier, failuresOnTier: 0, escalated: false, config: this.config });
+    const first = this.routeStep(step, classification, this.inPlan(plan, step));
+    // Learning files the outcome under the rung that actually ran first, with the rater's own effort for it (so the key matches
+    // what the rater looks up later, whether or not effort is applied).
+    const startEffort = first.tier === first.ratedTier ? first.effort : effortAt(first.tier, first.score ?? 0.5);
     const rec: StepRecord = {
       stepId: step.id, title: step.title, model: first.model, tier: first.tier, attempts: 0, escalated: false, usage: emptyUsage(), outcome: 'failed',
       ...(first.score !== undefined ? { rated: { tier: first.tier, ...(startEffort ? { effort: startEffort } : {}), score: first.score } } : {}),
@@ -654,7 +669,9 @@ export class Pipeline {
     let tier = first.tier;
     let failuresOnTier = 0;
     let failure: string | undefined;
-    let decision = first;
+    /** The decision the current model was chosen with. Retries adjust the effort from THIS each time, so they never compound. */
+    let base = first;
+    let decision: RouteDecision;
 
     for (;;) {
       const cap = this.config.limits.maxBudgetUsdPerTask;
@@ -667,10 +684,10 @@ export class Pipeline {
       }
       rec.attempts += 1;
       rec.tier = tier;
-      rec.model = decision.model;
-      const effort = effortFor({ decision, tier, failuresOnTier, escalated: rec.escalated, config: this.config });
+      rec.model = base.model;
+      const effort = effortFor({ decision: base, tier, failuresOnTier, escalated: rec.escalated, config: this.config });
       // The reason already names the rated effort; say so again only when a retry, an escalation or a pinned setting changed it.
-      if (effort !== decision.effort) decision = { ...decision, effort, reason: `${decision.reason.replace(/ · effort \w+$/, '')}${effort ? ` · effort ${effort}` : ''}` };
+      decision = effort === base.effort ? base : { ...base, effort, reason: `${base.reason}${effort ? ` · effort ${effort}` : ''}` };
       emit({ type: 'stage', stage: 'verify', status: 'pending' });
       emit({ type: 'step:start', stepId: step.id, title: step.title, route: decision, attempt: rec.attempts, at: this.now() });
       a.current('execute');
@@ -774,7 +791,7 @@ export class Pipeline {
         emit({ type: 'step:escalate', stepId: step.id, from: next.from, to: next.tier, reason: `failed ${failuresOnTier}x on ${next.from}` });
         tier = next.tier;
         failuresOnTier = 0;
-        decision = { ...decision, tier, model: this.config.models[tier], reason: `escalated from ${next.from}`, source: undefined };
+        base = { ...base, tier, model: this.config.models[tier], reason: `escalated from ${next.from}`, source: undefined };
       }
     }
   }
