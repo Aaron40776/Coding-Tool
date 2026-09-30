@@ -10,7 +10,7 @@ export type ClaudeStreamEvent =
   | { kind: 'init'; model: string; sessionId: string }
   | { kind: 'text'; text: string }
   | { kind: 'tool'; name: string; summary: string; /** Set for tools that modify a file. */ writtenFile?: string }
-  | { kind: 'progress'; inputTokens: number; outputTokens: number; cacheReadTokens: number }
+  | { kind: 'progress'; inputTokens: number; outputTokens: number; cacheReadTokens: number; /** Size of the conversation as of the latest message: what the next turn re-reads. */ contextTokens: number }
   | { kind: 'limits'; windows: Record<string, LimitWindow>; status?: string }
   | { kind: 'result'; result: ClaudeResult };
 
@@ -152,11 +152,13 @@ export class StreamParser {
       this.totals.input += num(msg.usage.input_tokens);
       this.totals.output += num(msg.usage.output_tokens);
       this.totals.cacheRead += num(msg.usage.cache_read_input_tokens);
+      const context = num(msg.usage.input_tokens) + num(msg.usage.cache_read_input_tokens) + num(msg.usage.cache_creation_input_tokens) + num(msg.usage.output_tokens);
       events.push({
         kind: 'progress',
         inputTokens: this.totals.input,
         outputTokens: this.totals.output,
         cacheReadTokens: this.totals.cacheRead,
+        contextTokens: context,
       });
     }
     return events;

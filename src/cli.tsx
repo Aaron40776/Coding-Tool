@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { Command, InvalidArgumentError } from 'commander';
 import { render } from 'ink';
 import pkg from '../package.json' with { type: 'json' };
 import { resolveClaudeCommand, runClaude } from './core/claude.js';
-import { expandHome, loadConfig } from './core/config.js';
+import { expandHome, globalConfigPath, loadConfig } from './core/config.js';
 import { EventBus } from './core/events.js';
 import { SmartError } from './core/errors.js';
 import { createCheckpoints } from './core/checkpoint.js';
@@ -70,12 +70,13 @@ async function readStdin(): Promise<string> {
 }
 
 async function main() {
-  // `smart init [--force]` writes a starter config. Only when it is the whole command line, so a task
+  // `smart init [--global] [--force]` writes a starter config. Only when it is the whole command line, so a task
   // that merely starts with the word "init" (`smart init the repo`) still runs as a task.
   const argv = process.argv.slice(2);
-  if (argv[0] === 'init' && argv.length <= 2 && (argv[1] === undefined || argv[1] === '--force')) {
-    const example = fileURLToPath(new URL('../smart.config.example.json', import.meta.url));
-    const r = initConfig(process.cwd(), example, argv[1] === '--force');
+  const initFlags = argv.slice(1);
+  if (argv[0] === 'init' && initFlags.length <= 2 && initFlags.every((f) => f === '--force' || f === '--global')) {
+    const target = initFlags.includes('--global') ? globalConfigPath() : join(process.cwd(), 'smart.config.json');
+    const r = initConfig(target, initFlags.includes('--force'));
     process.stdout.write(`${r.message}\n`);
     process.exit(r.ok ? 0 : 1);
   }

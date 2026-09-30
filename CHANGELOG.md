@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Cheaper long conversations**: once the Claude Code session has grown past `session.maxContextTokens` (default 80k tokens), the next task starts a fresh session with the conversation summary. Every turn of every step re-reads the whole session, so long chats used to make each step dearer. The size is measured from Claude's own usage report.
+- **Faster plans**: steps before the last run the quick checks (typecheck, lint, build); the test suite runs after the last step, where anything an earlier step broke is still caught and fixed. `verify.testEveryStep: true` restores tests after every step; your own `verify.commands` always all run.
+- **Config**: your global `~/.smart/smart.config.json` and a project's `smart.config.json` are merged (the project wins key by key). A project file used to hide your global settings completely. `smart init` now writes a small starter with notes instead of every default (which pinned them all, so improvements to the defaults never reached you); `smart init --global` writes your global one. `"//"` keys are allowed as comments.
+- `--model <tier> --no-plan` no longer spends a classifier call: nothing it says would change what runs.
+- Page Up / Page Down scroll the output while typing, without switching panels.
+- Fix (macOS and other symlinked paths): a file Claude reported through a symlinked folder (macOS `/var` is `/private/var`) was listed as `../../…/src/a.ts` instead of `src/a.ts` in the files a step touched. Found by the new macOS CI.
+- Node.js 22 or newer is required (Node 20 reached end of life in April 2026); CI runs on Linux, Windows and macOS with Node 22 and 24.
+
 - **Usage limit reached**: Claude refusing a call because your 5-hour or weekly limit is used up now stops the task at once. It used to count as an ordinary failure: a retry, then escalation to a bigger model, each refused again. `smart` says when the limit resets (from Claude's message or the last reported window) and keeps the task for `/resume`, also when it happened in the first step (a task that failed before any step finished could not be resumed).
 - **`/undo` is safer and survives restarts**: it reverts only the files the task changed (it used to revert every file that differed, including your own later edits to other files and files you created). The last 20 tasks are remembered per directory, so `/undo` and `/diff` work after quitting and starting `smart` again, and after `/new`.
 - **Type while a task runs**: `Enter` queues the next task, which starts when the current one completes (not after a failure; `Esc` cancels both). Read-only commands such as `/usage`, `/cost` and `/diff` work meanwhile. `@file` completion now picks up files created during the session.

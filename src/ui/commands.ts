@@ -111,5 +111,5 @@ export const HELP_TEXT = [
   '  /mode <m>         permissions: bypass | edits | plan (read-only) | auto',
   '  /help, /quit',
   'While a task runs, Enter queues the next task (Esc cancels both); /usage, /cost and /diff work meanwhile.',
-  'Keys: Esc cancel · Tab switch panel · ↑/↓ scroll or select · Ctrl+C quit',
+  'Keys: Esc cancel · PgUp/PgDn scroll the output · Tab switch panel · ↑/↓ scroll or select · Ctrl+C quit',
 ].join('\n');

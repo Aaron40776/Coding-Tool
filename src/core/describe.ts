@@ -12,7 +12,7 @@ export function describeConfig(c: SmartConfig, ctx: { permissionMode: string; mo
     r.keywordRules.length ? `Keyword rules: ${r.keywordRules.map((k) => `/${k.match}/→${k.tier}`).join(', ')}` : 'Keyword rules: none',
     `Escalation: retry ${c.escalation.retriesPerModel}× per model, then ${c.escalation.ladder.join(' → ')}`,
     `Effort: ${c.runner.autoEffort ? 'chosen per task' : 'Claude Code default'}${Object.keys(c.runner.effort).length ? ` (pinned: ${Object.entries(c.runner.effort).map(([k, v]) => `${k}=${v}`).join(', ')})` : ''} · Lean classify/plan/review calls: ${c.runner.leanCalls ? 'on' : 'off'}`,
-    `Review: ${c.review.enabled ? `on (${r.reviewer})` : 'off'} · Session resume: ${c.session.resume ? 'on' : 'off'} · Warm-cache hold: ${c.session.keepWarmTier ? `on (${c.session.cacheTtlSec}s)` : 'off'}`,
+    `Review: ${c.review.enabled ? `on (${r.reviewer})` : 'off'} · Session resume: ${c.session.resume ? `on${c.session.maxContextTokens ? ` (fresh session past ${Math.round(c.session.maxContextTokens / 1000)}k tokens)` : ''}` : 'off'} · Tests: ${c.verify.testEveryStep ? 'every step' : 'after the last plan step'} · Warm-cache hold: ${c.session.keepWarmTier ? `on (${c.session.cacheTtlSec}s)` : 'off'}`,
     `Permission mode: ${ctx.permissionMode}${ctx.modeOverridden ? ' (set with /mode)' : ''} · Limits: plan ≤${c.limits.maxPlanSteps} steps, budget/step ${c.limits.maxBudgetUsdPerStep ?? 'none'}, budget/task ${c.limits.maxBudgetUsdPerTask ?? 'none'}`,
     `Usage guard: avoid Opus at ≥${pct(c.usage.downshiftAt)}, warn at ≥${pct(c.usage.warnAt)}${t ? ` (now ${windowLabel(t.name)} ${pct(t.window.utilization)})` : ''}`,
   ];

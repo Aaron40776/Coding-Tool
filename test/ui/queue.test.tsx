@@ -82,3 +82,16 @@ describe('typing while a task runs', () => {
     expect(g.prompts).toHaveLength(1);
   });
 });
+
+describe('scrolling', () => {
+  it('Page Up and Page Down scroll the output while typing, without switching panels', async () => {
+    const { stdin, lastFrame } = render(<App {...makeApp()} />);
+    for (let i = 0; i < 4; i++) await type(stdin, '/help'); // plenty of output lines
+    stdin.write('\u001b[5~'); // Page Up
+    await waitFor(() => /scrolled \d+ up/.test(lastFrame()!));
+    stdin.write('\u001b[6~'); // Page Down
+    await waitFor(() => !/scrolled \d+ up/.test(lastFrame()!));
+    stdin.write('abc'); // the input still has focus
+    await waitFor(() => lastFrame()!.includes('> abc'));
+  });
+});

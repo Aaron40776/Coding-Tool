@@ -69,6 +69,11 @@ const ConfigSchema = z.object({
       cacheTtlSec: z.number().int().min(0).default(300),
       /** While the cache is warm, never downgrade to a cheaper model (it would re-read the history at full price). */
       keepWarmTier: z.boolean().default(true),
+      /**
+       * Once the Claude Code session has grown past this many tokens, the next task starts a fresh one with a summary of the
+       * conversation: every turn of every step re-reads the whole session, so a long chat makes each step cost more. 0 = never.
+       */
+      maxContextTokens: z.number().int().min(0).default(80_000),
     })
     .prefault({}),
   runner: z
@@ -87,7 +92,13 @@ const ConfigSchema = z.object({
     })
     .prefault({}),
   verify: z
-    .object({ auto: z.boolean().default(true), commands: z.array(z.string()).default([]), timeoutSec: z.number().int().min(5).default(300) })
+    .object({
+      auto: z.boolean().default(true),
+      commands: z.array(z.string()).default([]),
+      timeoutSec: z.number().int().min(5).default(300),
+      /** Run the detected `test` script after every plan step. Off: earlier steps get the quick checks, the last step the tests too. */
+      testEveryStep: z.boolean().default(false),
+    })
     .prefault({}),
   review: z.object({ enabled: z.boolean().default(true) }).prefault({}),
   usage: z
@@ -111,37 +122,37 @@ export const defaultConfig = (): SmartConfig => ConfigSchema.parse({});
 /** `~`, `~/x` and `~\\x` mean the home directory; `~foo` is an ordinary relative name. */
 export const expandHome = (p: string): string => (p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? join(homedir(), p.slice(1)) : resolve(p));
 
-/** Candidate config locations, highest priority first. */
-export const configPaths = (cwd: string): string[] => [
-  join(cwd, 'smart.config.json'),
-  join(homedir(), '.smart', 'smart.config.json'),
-];
+/** Your own config for every project. */
+export const globalConfigPath = (home: string = homedir()): string => join(home, '.smart', 'smart.config.json');
 
 export interface LoadedConfig {
   config: SmartConfig;
-  /** Path the config was read from, or null when defaults are used. */
+  /** The highest-priority file that was read (the project's, else your global one), or null when defaults are used. */
   source: string | null;
+  /** Every file that was read, lowest priority first: your global config, then the project's (or `--config`). */
+  sources: string[];
   /** Things worth telling the user: unknown (probably misspelled) keys, and risky settings in a project-local file. */
   warnings: string[];
 }
 
-/** Keys the schema knows, two levels deep (every key has a default, so the default config lists them all). */
 /** Settings that used to exist: still accepted silently so old config files do not warn. */
 const REMOVED_KEYS = new Set(['pricing']);
+/** JSON has no comments, so `"//": "..."` (and `$schema`) are allowed anywhere as notes. */
+const isNote = (k: string): boolean => k.startsWith('//') || k.startsWith('$');
 
 function unknownKeys(raw: unknown): string[] {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return [];
   const known = defaultConfig() as unknown as Record<string, unknown>;
   const out: string[] = [];
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (REMOVED_KEYS.has(k)) continue;
+    if (REMOVED_KEYS.has(k) || isNote(k)) continue;
     if (!(k in known)) {
       out.push(k);
       continue;
     }
     const section = known[k];
     if (typeof v === 'object' && v !== null && !Array.isArray(v) && typeof section === 'object' && section !== null && !Array.isArray(section)) {
-      for (const sub of Object.keys(v)) if (!(sub in (section as Record<string, unknown>))) out.push(`${k}.${sub}`);
+      for (const sub of Object.keys(v)) if (!isNote(sub) && !(sub in (section as Record<string, unknown>))) out.push(`${k}.${sub}`);
     }
   }
   return out;
@@ -155,29 +166,54 @@ function riskyProjectSettings(config: SmartConfig): string[] {
   return out;
 }
 
-export function loadConfig(cwd: string, explicitPath?: string): LoadedConfig {
-  const candidates = explicitPath ? [resolve(cwd, explicitPath)] : configPaths(cwd);
-  const source = candidates.find((p) => existsSync(p)) ?? null;
-  if (explicitPath && !source) throw new SmartError('config', `Config file not found: ${explicitPath}`);
-  if (!source) return { config: defaultConfig(), source: null, warnings: [] };
+const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** `over` on top of `base`: objects merge key by key, anything else (values, arrays, null) replaces. */
+export function mergeConfig(base: unknown, over: unknown): unknown {
+  if (!isPlainObject(base) || !isPlainObject(over)) return over === undefined ? base : over;
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(over)) out[k] = mergeConfig(base[k], v);
+  return out;
+}
+
+function readConfigFile(path: string): unknown {
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(source, 'utf8'));
+    raw = JSON.parse(readFileSync(path, 'utf8'));
   } catch (e) {
-    throw new SmartError('config', `Could not parse ${source}: ${(e as Error).message}`);
+    throw new SmartError('config', `Could not parse ${path}: ${(e as Error).message}`);
   }
+  // Each file must be valid on its own, so an error names the file it is in.
   const parsed = ConfigSchema.safeParse(raw);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
-    throw new SmartError('config', `Invalid config in ${source}: ${issues}`);
+    throw new SmartError('config', `Invalid config in ${path}: ${issues}`);
   }
+  return raw;
+}
+
+/**
+ * Your global `~/.smart/smart.config.json`, then the project's `./smart.config.json` (or `--config <path>`) on top: a
+ * project file changes only the keys it sets, the rest of your own settings still apply.
+ */
+export function loadConfig(cwd: string, explicitPath?: string, home: string = homedir()): LoadedConfig {
+  const project = explicitPath ? resolve(cwd, explicitPath) : join(cwd, 'smart.config.json');
+  if (explicitPath && !existsSync(project)) throw new SmartError('config', `Config file not found: ${explicitPath}`);
+  const sources = [...new Set([globalConfigPath(home), project])].filter((p) => existsSync(p));
+  if (sources.length === 0) return { config: defaultConfig(), source: null, sources: [], warnings: [] };
+
   const warnings: string[] = [];
-  const unknown = unknownKeys(raw);
-  if (unknown.length) warnings.push(`${source}: ignoring unknown setting${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')} (a typo?)`);
-  if (source === candidates[0] && !explicitPath) {
-    const risky = riskyProjectSettings(parsed.data);
-    if (risky.length) warnings.push(`This directory's smart.config.json sets ${risky.join(' and ')}. Only run smart here if you trust this project.`);
+  let merged: unknown = {};
+  for (const path of sources) {
+    const raw = readConfigFile(path);
+    const unknown = unknownKeys(raw);
+    if (unknown.length) warnings.push(`${path}: ignoring unknown setting${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')} (a typo?)`);
+    // A config that came with the repository runs with your permissions: say so when it runs commands or passes flags.
+    if (path === project && !explicitPath && path !== globalConfigPath(home)) {
+      const risky = riskyProjectSettings(ConfigSchema.parse(raw));
+      if (risky.length) warnings.push(`This directory's smart.config.json sets ${risky.join(' and ')}. Only run smart here if you trust this project.`);
+    }
+    merged = mergeConfig(merged, raw);
   }
-  return { config: parsed.data, source, warnings };
+  return { config: ConfigSchema.parse(merged), source: sources.at(-1) ?? null, sources, warnings };
 }

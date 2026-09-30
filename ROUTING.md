@@ -65,6 +65,8 @@ If the classifier output is unusable the rater works from the text alone, with S
 - `smart -c` continues the last conversation for the current directory (stored in `~/.smart/conversations.json`); `/new` forgets it.
 - If Claude Code no longer has the saved session, `smart` starts a new one and puts the memory summary in the prompt.
 - `session.resume: false` turns the persisted session off: every step is stateless and gets the memory summary in its prompt instead.
+- A session that has grown past `session.maxContextTokens` (default 80k tokens) is replaced by a fresh one at the next task, which gets the
+  memory summary instead. Every turn of every step re-reads the whole session, so a long chat otherwise makes each step dearer. `0` never rotates.
 
 **Model switches and the prompt cache.** Anthropic's prompt cache is per model. Resuming a long session on a *different* model re-reads the whole
 history at full price (I measured $0.18 vs $0.025 for the same follow-up). So for follow-up tasks, while the session is warm
@@ -97,11 +99,16 @@ Checks are auto-detected from `package.json` scripts, in cheapest-first order: `
 (npm's placeholder test script is ignored). They run with the project's package manager: `packageManager` in `package.json`, else the lockfile
 (`pnpm-lock.yaml`, `yarn.lock`, `bun.lock`), else npm (also when that tool is not installed). Other languages are not guessed, because a first
 `cargo check` or `go vet` can take minutes and a timeout would count as a failed step: set `verify.commands`, for example `["pytest -q", "ruff check ."]`.
+In a plan, the steps before the last get the quick checks (typecheck, lint, build) and the last step also runs `test`: a test suite is often the slow
+part, and anything an earlier step broke still fails there and is fixed before the task counts as done. `verify.testEveryStep: true` runs the tests
+after every step; your own `verify.commands` always all run.
 A question that changed no files is not verified, and neither is a change that only touched prose or images (`.md`, `.txt`, `.png`, ...): there is nothing for a build or test to break. Config files such as `package.json` are still checked.
 
 ## Tuning
 
-Copy `smart.config.example.json` to `./smart.config.json` (or `~/.smart/smart.config.json`). Only the keys you set are changed.
+`smart init` writes a small `./smart.config.json`, `smart init --global` one in `~/.smart/` for all your projects. Put in only the settings you change
+(every setting and its default: `smart.config.example.json`); the rest keeps the defaults, including future improvements. A project's file applies on top
+of your global one, key by key, so it only needs what differs. `"//"` keys are notes and ignored. `--config <path>` takes the project file's place.
 
 **Spend less**
 - Send more work to a cheaper model: `"routing": { "multi_file": "haiku" }`.

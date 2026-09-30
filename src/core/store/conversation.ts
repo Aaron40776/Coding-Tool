@@ -47,6 +47,8 @@ export interface Conversation {
   pending?: PendingTask;
   /** Tasks that changed files, oldest first (at most 20). */
   undo?: UndoEntry[];
+  /** How big the Claude Code session has grown (tokens), as of its last call. */
+  contextTokens?: number;
 }
 
 export const newConversation = (): Conversation => ({ id: randomUUID(), sessionId: null, tasks: [] });
@@ -122,7 +124,7 @@ export class ConversationStore {
   load(cwd: string): Conversation | null {
     const c = this.read().byDir[cwd];
     if (!c || !Array.isArray(c.tasks)) return null;
-    return { id: c.id, sessionId: c.sessionId ?? null, lastTier: c.lastTier, lastCallAt: c.lastCallAt, lastCallAtByTier: c.lastCallAtByTier, tasks: c.tasks, pending: validPending(c.pending), undo: validUndo(c.undo) };
+    return { id: c.id, sessionId: c.sessionId ?? null, lastTier: c.lastTier, lastCallAt: c.lastCallAt, lastCallAtByTier: c.lastCallAtByTier, tasks: c.tasks, pending: validPending(c.pending), undo: validUndo(c.undo), ...(typeof c.contextTokens === 'number' ? { contextTokens: c.contextTokens } : {}) };
   }
 
   /** Returns an error message when it could not be saved. */
