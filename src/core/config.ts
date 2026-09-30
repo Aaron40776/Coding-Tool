@@ -3,9 +3,10 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { SmartError } from './errors.js';
+import { EFFORTS } from './types.js';
 
 const tier = z.enum(['haiku', 'sonnet', 'opus']);
-const effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+const effort = z.enum(EFFORTS);
 
 const validRegex = (s: string): boolean => {
   try {
@@ -23,13 +24,18 @@ const ConfigSchema = z.object({
     .prefault({}),
   routing: z
     .object({
+      /**
+       * How the rater trades cost against quality: `cost` needs stronger evidence before it uses a bigger model or higher effort,
+       * `quality` needs less. The per-complexity tiers below are floors the rater never goes under.
+       */
+      optimize: z.enum(['cost', 'balanced', 'quality']).default('balanced'),
       trivial: tier.default('haiku'),
       small_edit: tier.default('sonnet'),
       multi_file: tier.default('sonnet'),
       large_build: tier.default('sonnet'),
       /** Plans big builds and hard tasks. */
       planner: tier.default('opus'),
-      /** Plans everything else that needs a plan (mid-size, multi-part changes): Sonnet is plenty and about 5x cheaper. */
+      /** Plans everything else that needs a plan (mid-size, multi-part changes): Sonnet is plenty and about 2x cheaper. */
       plannerLight: tier.default('sonnet'),
       classifier: tier.default('haiku'),
       reviewer: tier.default('haiku'),

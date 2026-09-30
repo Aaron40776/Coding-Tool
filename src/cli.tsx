@@ -12,7 +12,9 @@ import { ConversationStore } from './core/store/conversation.js';
 import { InputHistory } from './core/store/inputHistory.js';
 import { Pipeline } from './core/pipeline.js';
 import { isTier } from './core/router.js';
+import { buildHistory } from './core/rating/learn.js';
 import { initConfig } from './init.js';
+import { describeRating } from './rate.js';
 import { runPrint } from './print.js';
 import { Tracker } from './core/store/tracker.js';
 import { LimitsStore } from './core/store/limits.js';
@@ -41,6 +43,7 @@ interface Options {
   config?: string;
   continue?: boolean;
   resume?: boolean;
+  rate?: boolean;
   print?: boolean;
   outputFormat: 'text' | 'json';
   verbose?: boolean;
@@ -87,6 +90,7 @@ async function main() {
     .option('--no-plan', 'skip the planning step and run the task as a single step')
     .option('--config <path>', 'path to a smart.config.json')
     .option('-c, --continue', 'continue the previous conversation in this directory')
+    .option('--rate', 'show how the task would be rated (model and effort) and why; calls no model')
     .option('--resume', 'continue the last failed or cancelled task from its first unfinished step (implies -c)')
     .option('-p, --print', 'headless mode: no UI, progress on stderr, final reply on stdout (reads the task from stdin if none given)')
     .option('--output-format <format>', 'with --print: text (default) or json', parseFormat, 'text')
@@ -110,6 +114,13 @@ async function main() {
   const configWarnings = loaded.warnings;
   if (opts.budget) config.limits.maxBudgetUsdPerTask = opts.budget;
   if (!opts.review) config.review.enabled = false;
+
+  if (opts.rate) {
+    if (!task) return fail('give the task to rate: smart --rate "fix the race condition in worker.js"');
+    const tracker = new Tracker(expandHome(config.trackerPath));
+    process.stdout.write(`${describeRating(task, config, buildHistory(tracker.load())).join('\n')}\n`);
+    process.exit(0);
+  }
 
   const claude = resolveClaudeCommand();
   if (spawnSync(claude.cmd, [...claude.prefix, '--version'], { stdio: 'ignore' }).error) {

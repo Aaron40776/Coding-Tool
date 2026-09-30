@@ -1,39 +1,57 @@
 # How `smart` routes tasks (and how to tune it)
 
 `smart` never guesses a model name. Every model it uses comes from `smart.config.json`, and every routing
-decision is shown in the UI with its reason (for example `multi_file → sonnet` or `keyword "race condition" → opus`).
+decision is shown in the UI with its reason, verdict first: `sonnet · medium · rated 0.41 · 78% sure (3 files, 2 parts; multi_file, normal)`.
+To see one without running anything: `smart --rate "your task"`.
 
 ## The pipeline
 
 1. **Classify** (cheap model, default Haiku). Scores your prompt as one of four complexities, says whether it needs a plan and how hard it is (`easy`, `normal`, `hard`). If the prompt is a pure question that needs none of your files, tools or current information, the classifier **answers it in the same call**: one Haiku call in total, no coding session. Greetings ("hey", "thanks") skip even the classifier.
-2. **Plan**, only when the task needs one (a large build always does; `--no-plan` turns this off). Big builds and `hard` tasks are planned by Opus (`routing.planner`); mid-size, multi-part changes by Sonnet (`routing.plannerLight`): about 2× faster and 5× cheaper, and plenty for a short plan. Plans are kept to a few substantial steps (`limits.maxPlanSteps`, default 6), because every step is a separate Claude Code call.
-3. **Route** every step to a model.
-4. **Execute** each step with a lean prompt, then **verify** it (tests, lint, build).
-5. **Escalate** a step that keeps failing to the next model up.
+2. **Plan**, only when the task needs one (a large build always does; `--no-plan` turns this off). Big builds and requests rated hard are planned by Opus (`routing.planner`); mid-size, multi-part changes by Sonnet (`routing.plannerLight`): about 2× cheaper (measured $0.016 vs $0.033 for the same plan) and somewhat faster, and plenty for a short plan. The planner also rates each step `easy`, `normal` or `hard`. Plans are kept to a few substantial steps (`limits.maxPlanSteps`, default 6), because every step is a separate Claude Code call.
+3. **Rate and route** every step: the rater (below) picks a model and an effort.
+4. **Execute** each step with a lean prompt, then **verify** it (tests, lint, build; not for docs-only changes) and review it.
+5. **Escalate** a step that keeps failing: one more try with more effort, then the next model up.
 
-## Complexity → model (defaults)
+## The rater: which model, which effort
 
-| Classifier says | Meaning | Default tier |
+Two things cost money: the model (Opus is about 2× Sonnet per token; measured) and how long it thinks (effort). Effort changed cost only slightly on short prompts and mostly buys quality, so the ladder spends effort first and the bigger model next:
+
+| rung | when the score is | |
 | --- | --- | --- |
-| `trivial` | a question or explanation, no file changes | haiku |
-| `small_edit` | a small change in one file | sonnet |
-| `multi_file` | a feature or fix across several files | sonnet |
-| `large_build` | building an app or big system from scratch | sonnet (planned by opus) |
+| haiku | below 0.12 | only where `routing.<complexity>` allows Haiku (questions by default) |
+| sonnet · low | 0.12 to 0.25 | routine edits |
+| sonnet · medium | 0.25 to 0.45 | ordinary features |
+| sonnet · high | 0.45 to 0.62 | bigger, multi-part work |
+| opus · medium | 0.62 to 0.80 | hard problems |
+| opus · high | 0.80 to 0.92 | very hard |
+| opus · xhigh | above 0.92 | the hardest |
 
-The planner, classifier and reviewer have their own roles (`routing.planner`, `routing.plannerLight`, `routing.classifier`, `routing.reviewer`).
+The score (0 = routine, 1 = hardest) blends three independent opinions:
+
+- **Local signals**, read from the text at no cost: what the work is about (concurrency, security, architecture, algorithms, intermittent bugs, performance, migrations, work across many files: harder; typos, renames, comments, formatting: easier), stack traces, questions that change nothing, how many files, parts and words. Several hard signals count with diminishing weight.
+- **The classifier** (complexity and difficulty), a cheap model's read of what the request means.
+- **For a plan step, the planner's** own rating of that step. The task's difficulty does not spread to every step, so a plan can mix a Sonnet scaffold step and an Opus concurrency step.
+
+When they disagree the score leans towards the higher one (a retry and lost time cost more than a somewhat pricier model), and the confidence drops. Confidence is also low near a rung boundary. The percentage is a heuristic (do the signals agree, and is the score clear of a boundary), not a calibrated probability. If the classifier failed, the local signals still rate the work. Local signals are keyword based and can misfire on a plan step ("scheduler" reads as an algorithm), which is why the planner's rating carries 60% of a step's score.
+
+The per-complexity settings (`routing.trivial`, `small_edit`, `multi_file`, `large_build`) are **floors**: the rater can go up from them, never below. `routing.optimize` shifts the boundaries: `cost` needs stronger evidence before a bigger rung, `quality` less (by 0.06).
+
+**It learns from your history.** Each step records the rung it was rated at and whether it passed first time. If a rung passed first time in under about 72% of your last-30-days steps in the same score band (after at least 6), the next similar step goes one rung up; after 15 near-perfect steps, one effort level down on the same model. The reason says so (`history: sonnet · medium passed first try in only 4 of 9 similar steps`). No model is called for any of this.
+
+**How good is it?** On 30 prompts I labelled while tuning it, 30 land in the expected range; on 20 written beforehand and not tuned on, 18 do (both are in `test/fixtures` and run in the tests). The labels are one person's judgement and the prompts are short, so treat that as a regression net, not proof: run `smart --rate` on your own tasks and adjust `optimize`, the floors and `keywordRules`.
+
+After a failed attempt the same model is retried one effort level up (Sonnet stops at high, Opus at xhigh); after escalating to a stronger model, that model's effort for the score plus one.
 
 ## Precedence
 
-For each step, the first rule that applies wins:
+For each step, the first rule that applies decides the **model**; effort still follows the score.
 
 1. **Forced model**: `--model <tier>` or `/model <tier>`. It applies to every step and to the planner, and a forced model is never escalated away from.
 2. **Your per-step choice** on the plan approval screen (press `m`).
-3. **Keyword rules**: `routing.keywordRules`, case-insensitive regexes matched against the step text (or your prompt, when there is no plan). First match wins.
-4. **Unusable classifier output**: if the classifier fails or returns malformed JSON, the task runs on **sonnet** and a warning is shown.
-5. **Hard tasks**: when the classifier marks a non-trivial task `hard` (tricky debugging, concurrency, algorithms, architecture, security) and there is no written plan, it goes straight to **opus**. The steps of a written plan do not: Opus already did the thinking in the plan, so Sonnet executes them.
-6. **The complexity map**: the table above.
+3. **Keyword rules**: `routing.keywordRules`, case-insensitive regexes matched against the step text (or your prompt, when there is no plan). First match wins. The default rule sends `architecture`, `race condition` and `deadlock` to Opus.
+4. **The rater**, above.
 
-When an account limit is nearly used up (`usage.downshiftAt`), automatic Opus choices are downshifted to Sonnet. Forced models and your per-step choices are never changed.
+If the classifier output is unusable the rater works from the text alone, with Sonnet as the floor. When an account limit is nearly used up (`usage.downshiftAt`), automatic Opus choices are downshifted to Sonnet. Forced models and your per-step choices are never changed.
 
 ## Conversations and follow-ups
 
@@ -90,10 +108,7 @@ Copy `smart.config.example.json` to `./smart.config.json` (or `~/.smart/smart.co
 
 **Cap spending**: `limits.maxBudgetUsdPerTask` stops a task once its total cost reaches that many dollars; `limits.maxBudgetUsdPerStep` caps one step.
 
-**Effort**: each coding step gets a thinking-effort level matched to the task (`runner.autoEffort`, on by default): `low` for trivial work and small changes the classifier calls easy,
-`medium` for ordinary edits, multi-file work and large builds, one level higher on Opus, on `hard` tasks and after a failed attempt (think harder before paying for a bigger model);
-the Opus planner runs at `high` for large builds. Haiku gets none. The level shows next to the model (`multi_file → sonnet · effort medium`).
-Pin a level per model with `"runner": { "effort": { "haiku": "low", "opus": "high" } }` (levels: low, medium, high, xhigh, max); a pinned level always wins. `"autoEffort": false` leaves Claude Code's default.
+**Effort**: chosen per step by the rater (see above; `runner.autoEffort`, on by default). Pin a level per model with `"runner": { "effort": { "haiku": "low", "opus": "high" } }` (levels: low, medium, high, xhigh, max); a pinned level always wins. `"autoEffort": false` leaves Claude Code's default. The Opus planner runs at `high` for big or hard-looking requests and `medium` otherwise.
 
 **Faster start-up**: `runner.leanCalls` (on by default) starts the tool-less classify, plan and review calls without your hooks, plugins, MCP servers and skills. `SMART_DEBUG=1` writes one line per
 `claude` call to `~/.smart/debug.log` (start-up, first text, total) so you can see whether a slow call is Claude Code's own start-up or the model.

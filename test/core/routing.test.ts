@@ -15,7 +15,7 @@ import { emptyUsage, type Complexity } from '../../src/core/types.js';
 
 interface Call { role: 'classifier' | 'planner' | 'executor'; model: string; prompt: string; session?: { id: string; resume: boolean }; effort?: string; tools?: string[]; lean?: boolean }
 
-function setup(opts: { complexities?: Complexity[]; config?: (c: SmartConfig) => void; executor?: (call: Call, n: number) => ClaudeResult | Promise<ClaudeResult>; store?: ConversationStore; conversation?: ReturnType<ConversationStore['load']>; cost?: number; classifier?: Record<string, unknown>; checkpoints?: Checkpointer } = {}) {
+function setup(opts: { complexities?: Complexity[]; config?: (c: SmartConfig) => void; executor?: (call: Call, n: number) => ClaudeResult | Promise<ClaudeResult>; store?: ConversationStore; conversation?: ReturnType<ConversationStore['load']>; cost?: number; classifier?: Record<string, unknown>; checkpoints?: Checkpointer; plannerSteps?: object[] } = {}) {
   const calls: Call[] = [];
   let clock = 1_000_000_000_000;
   const queue = [...(opts.complexities ?? [])];
@@ -29,7 +29,7 @@ function setup(opts: { complexities?: Complexity[]; config?: (c: SmartConfig) =>
     const call: Call = { role, model: o.model, prompt: o.prompt, session: o.session, effort: o.effort, tools: o.tools, lean: o.lean };
     calls.push(call);
     if (role === 'classifier') return res({ structured: { complexity: queue.shift() ?? 'small_edit', needsPlan: false, reason: 'r', ...opts.classifier } });
-    if (role === 'planner') return res({ structured: { summary: 'Plan', steps: [{ title: 'A', instructions: 'do a', acceptance: [] }, { title: 'B', instructions: 'do b', acceptance: [] }] } });
+    if (role === 'planner') return res({ structured: { summary: 'Plan', steps: opts.plannerSteps ?? [{ title: 'A', instructions: 'do a', acceptance: [] }, { title: 'B', instructions: 'do b', acceptance: [] }] } });
     executorCalls += 1;
     if (opts.executor) return opts.executor(call, executorCalls);
     return res({ text: `reply ${executorCalls}` });
@@ -62,21 +62,73 @@ describe('classifier output: answer and difficulty', () => {
   });
 });
 
-describe('hard tasks go to Opus', () => {
-  const at = (over: Record<string, unknown>, extra: Partial<Parameters<typeof route>[0]> = {}) => route({ classification: classification(over), text: 'x', ...extra }, config);
+describe('the rater decides the model', () => {
+  const at = (text: string, over: Record<string, unknown>, extra: Partial<Parameters<typeof route>[0]> = {}) => route({ classification: classification(over), text, ...extra }, config);
 
-  it('routes a hard task straight to Opus, whatever its size', () => {
-    expect(at({ difficulty: 'hard' }).tier).toBe('opus');
-    expect(at({ difficulty: 'hard', complexity: 'multi_file' }).tier).toBe('opus');
-    expect(at({ difficulty: 'hard' }).reason).toContain('hard');
+  it('sends a hard-looking, hard-rated task to Opus and says why', () => {
+    const d = at('the workers stall intermittently under load, find the root cause of this concurrency bug in worker.js', { difficulty: 'hard' });
+    expect(d.tier).toBe('opus');
+    expect(d.reason).toMatch(/opus · \w+ · rated \d\.\d\d · \d+% sure \(.*concurrency/);
+    expect(d.score).toBeGreaterThan(0.6);
+    expect(d.confidence).toBeGreaterThan(0);
   });
 
-  it('never for a trivial one, for normal/easy ones, or against a forced model or a step tier', () => {
-    expect(at({ difficulty: 'hard', complexity: 'trivial' }).tier).toBe('haiku');
-    expect(at({ difficulty: 'normal' }).tier).toBe('sonnet');
-    expect(at({ difficulty: 'easy' }).tier).toBe('sonnet');
-    expect(at({ difficulty: 'hard' }, { override: 'haiku' }).tier).toBe('haiku');
-    expect(at({ difficulty: 'hard' }, { step: { tier: 'sonnet' } }).tier).toBe('sonnet');
+  it('keeps a routine edit on Sonnet at low effort, and a plain question on Haiku', () => {
+    expect(at('fix the typo in the README', { difficulty: 'easy' })).toMatchObject({ tier: 'sonnet', effort: 'low' });
+    expect(at('what is a closure?', { complexity: 'trivial', difficulty: 'easy' }).tier).toBe('haiku');
+  });
+
+  it('a hard classification alone is not enough when the text shows nothing hard, but it does raise the score', () => {
+    const plain = at('do the thing in the module', { difficulty: 'normal' });
+    const flagged = at('do the thing in the module', { difficulty: 'hard' });
+    expect(flagged.score!).toBeGreaterThan(plain.score!);
+  });
+
+  it('a forced model, a per-step tier and a keyword rule still decide the model; effort follows the score', () => {
+    expect(at('fix the intermittent deadlock', { difficulty: 'hard' }, { override: 'haiku' }).tier).toBe('haiku');
+    const stepPick = at('fix the typo', { difficulty: 'easy' }, { step: { tier: 'opus' } });
+    expect(stepPick.tier).toBe('opus');
+    expect(stepPick.effort).toBe('medium'); // Opus starts at medium even for an easy step
+    expect(at('something about architecture', { difficulty: 'normal' }).tier).toBe('opus'); // built-in keyword rule
+  });
+
+  it('unusable classifier output no longer means "always Sonnet": the local signals still rate the work', () => {
+    const fallback = { ...classification({}), fallback: true };
+    const deadlock = route({ classification: fallback, text: 'the workers stall intermittently under load, find the root cause of this concurrency bug' }, config);
+    expect(deadlock.tier).toBe('opus');
+    expect(deadlock.source).toBe('fallback');
+    expect(deadlock.reason).toContain('classifier output unusable');
+    expect(route({ classification: fallback, text: 'fix the typo in the readme' }, config).tier).toBe('sonnet'); // Sonnet is the floor
+  });
+
+  it('the per-complexity tier in the config is a floor the rater never goes under', () => {
+    const c = defaultConfig();
+    c.routing.multi_file = 'opus';
+    expect(route({ classification: classification({ complexity: 'multi_file' }), text: 'fix the typo in the readme' }, c).tier).toBe('opus');
+    c.routing.small_edit = 'haiku';
+    // with a Haiku floor an easy, low-scoring edit may go to Haiku, but a harder one is still raised
+    expect(route({ classification: classification({ complexity: 'small_edit', difficulty: 'easy' }), text: 'fix the typo in the readme' }, c).tier).toBe('haiku');
+    expect(route({ classification: classification({ complexity: 'small_edit', difficulty: 'normal' }), text: 'add input validation and error messages to the signup form and the profile form' }, c).tier).toBe('sonnet');
+  });
+
+  it('routing.optimize moves the same work to a cheaper or a stronger rung', () => {
+    const text = 'add a search box to the todo list and persist todos in localStorage';
+    const rung = (optimize: 'cost' | 'balanced' | 'quality') => {
+      const c = defaultConfig();
+      c.routing.optimize = optimize;
+      return route({ classification: classification({ complexity: 'multi_file' }), text }, c);
+    };
+    const order = ['low', 'medium', 'high'];
+    expect(order.indexOf(rung('cost').effort!)).toBeLessThanOrEqual(order.indexOf(rung('balanced').effort!));
+    expect(order.indexOf(rung('quality').effort!)).toBeGreaterThanOrEqual(order.indexOf(rung('balanced').effort!));
+    expect(rung('cost').score).toBe(rung('balanced').score); // the score is the same, only the thresholds move
+  });
+
+  it('a step of a written plan is rated on its own text and the planner\'s difficulty', () => {
+    const hardStep = route({ classification: classification({ complexity: 'large_build' }), text: 'Lock-free queue\nimplement the queue so workers never deadlock or race', step: { difficulty: 'hard' } }, config);
+    const easyStep = route({ classification: classification({ complexity: 'large_build' }), text: 'Scaffold\nset up the folders and boilerplate', step: { difficulty: 'easy' } }, config);
+    expect(hardStep.tier).toBe('opus');
+    expect(easyStep).toMatchObject({ tier: 'sonnet', effort: 'low' });
   });
 });
 
@@ -121,7 +173,8 @@ describe('difficulty in the pipeline', () => {
   it('runs a hard single task on Opus at high effort', async () => {
     const t = setup({ classifier: { complexity: 'multi_file', difficulty: 'hard' } });
     await t.pipeline.runTask('fix the intermittent deadlock in the queue');
-    expect(t.executors()[0]).toMatchObject({ model: 'opus', effort: 'high' });
+    expect(t.executors()[0]).toMatchObject({ model: 'opus' });
+    expect(['medium', 'high']).toContain(t.executors()[0]?.effort);
   });
 
   it('does not send every step of a written plan to Opus: Opus plans, Sonnet executes', async () => {
@@ -201,11 +254,19 @@ describe('review fixes', () => {
     expect(finished).toBe(true);
   });
 
-  it('gives a hard step of a written plan the effort bump without sending it to Opus', async () => {
-    const t = setup({ complexities: ['large_build'], classifier: { difficulty: 'hard' } });
-    await t.pipeline.runTask('build a compiler', { autoApprove: true });
-    expect(t.executors().map((c) => c.model)).toEqual(['sonnet', 'sonnet']);
-    expect(t.executors().map((c) => c.effort)).toEqual(['high', 'high']);
+  it('rates each step of a written plan by the planner\'s difficulty: the easy one on Sonnet low, the hard one on Opus', async () => {
+    const t = setup({
+      complexities: ['large_build'],
+      plannerSteps: [
+        { title: 'Scaffold', instructions: 'set up the folders and boilerplate', acceptance: [], difficulty: 'easy' },
+        { title: 'Lock-free queue', instructions: 'implement the queue so workers never deadlock or race', acceptance: [], difficulty: 'hard' },
+      ],
+    });
+    await t.pipeline.runTask('build a job runner', { autoApprove: true });
+    const [scaffold, queue] = t.executors();
+    expect(scaffold).toMatchObject({ model: 'sonnet', effort: 'low' });
+    expect(queue?.model).toBe('opus');
+    expect(['medium', 'high']).toContain(queue?.effort);
   });
 
   it('retries a failed lean call normally on any claude error, then stops using lean flags if that works', async () => {

@@ -44,6 +44,7 @@ export function applyLimitPressure(decision: RouteDecision, limits: Limits | nul
   const t = tightest(limits);
   if (!t || t.window.utilization < at) return decision;
   return {
+    ...decision,
     tier: 'sonnet',
     model: modelFor('sonnet', config),
     reason: `${decision.reason}; ${windowLabel(t.name)} limit at ${pct(t.window.utilization)} so using sonnet instead of opus`,

@@ -1,0 +1,37 @@
+[
+  { "text": "what does util.js do?", "classification": { "complexity": "trivial", "difficulty": "easy" }, "want": [0, 0] },
+  { "text": "what is a closure in javascript?", "classification": { "complexity": "trivial", "difficulty": "easy" }, "want": [0, 0] },
+  { "text": "explain how promises work", "classification": { "complexity": "trivial", "difficulty": "normal" }, "want": [0, 1] },
+  { "text": "why does our job queue deadlock under load, and how do I prevent race conditions between workers?", "classification": { "complexity": "trivial", "difficulty": "hard" }, "want": [3, 6] },
+
+  { "text": "fix the typo in the README", "classification": { "complexity": "small_edit", "difficulty": "easy" }, "want": [1, 1] },
+  { "text": "rename the function foo to computeTotal in utils.js", "classification": { "complexity": "small_edit", "difficulty": "easy" }, "want": [1, 1] },
+  { "text": "change the submit button color to blue", "classification": { "complexity": "small_edit", "difficulty": "easy" }, "want": [1, 1] },
+  { "text": "bump the version number to 1.2.0", "classification": { "complexity": "small_edit", "difficulty": "easy" }, "want": [1, 1] },
+  { "text": "remove the unused import in app.ts", "classification": { "complexity": "small_edit", "difficulty": "easy" }, "want": [1, 1] },
+  { "text": "add a --verbose flag to the CLI that prints each step", "classification": { "complexity": "small_edit", "difficulty": "normal" }, "want": [1, 2] },
+  { "text": "make the search case-insensitive", "classification": { "complexity": "small_edit", "difficulty": "normal" }, "want": [1, 2] },
+  { "text": "add input validation to the signup form", "classification": { "complexity": "small_edit", "difficulty": "normal" }, "want": [1, 3] },
+
+  { "text": "add a search box to the todo list, persist todos in localStorage, and cover both with tests", "classification": { "complexity": "multi_file", "difficulty": "normal" }, "want": [2, 3] },
+  { "text": "add pagination to the users endpoint and update the frontend table to use it", "classification": { "complexity": "multi_file", "difficulty": "normal" }, "want": [2, 3] },
+  { "text": "extract the config loading into its own module, add validation errors with helpful messages, and update the docs", "classification": { "complexity": "multi_file", "difficulty": "normal" }, "want": [2, 3] },
+  { "text": "add a dark mode toggle to every page and remember the choice", "classification": { "complexity": "multi_file", "difficulty": "easy" }, "want": [1, 3] },
+
+  { "text": "make me a snake game in the browser", "classification": { "complexity": "large_build", "difficulty": "normal" }, "want": [2, 3] },
+  { "text": "build a REST API for a todo list with tests", "classification": { "complexity": "large_build", "difficulty": "normal" }, "want": [2, 3] },
+  { "text": "build a markdown blog generator with tags, an index page and an RSS feed", "classification": { "complexity": "large_build", "difficulty": "normal" }, "want": [2, 3] },
+
+  { "text": "our job queue sometimes deadlocks under load, find and fix the race in worker.js", "classification": { "complexity": "small_edit", "difficulty": "hard" }, "want": [4, 6] },
+  { "text": "fix the memory leak in the websocket handler, it grows until the process is killed", "classification": { "complexity": "multi_file", "difficulty": "hard" }, "want": [4, 6] },
+  { "text": "the integration tests are flaky, they fail intermittently and I can't reproduce it locally, find the root cause", "classification": { "complexity": "multi_file", "difficulty": "hard" }, "want": [4, 6] },
+  { "text": "implement a parser for arithmetic expressions with operator precedence, parentheses and good error recovery", "classification": { "complexity": "multi_file", "difficulty": "hard" }, "want": [4, 6] },
+  { "text": "redesign the authentication architecture to support OAuth and SSO across all services", "classification": { "complexity": "large_build", "difficulty": "hard" }, "want": [5, 6] },
+  { "text": "fix the SQL injection vulnerability in the login handler and audit the other queries", "classification": { "complexity": "multi_file", "difficulty": "hard" }, "want": [4, 6] },
+  { "text": "TypeError: Cannot read properties of undefined (reading 'id')\n    at getUser (src/users.js:42:17)\n    at handler (src/routes.js:88:5)\n    at Layer.handle (node_modules/express/lib/router/layer.js:95:5)\nfix this", "classification": { "complexity": "small_edit", "difficulty": "normal" }, "want": [2, 4] },
+
+  { "text": "optimize the slow dashboard query, it takes 8 seconds", "classification": { "complexity": "multi_file", "difficulty": "normal" }, "want": [3, 5] },
+  { "text": "migrate the database schema to add multi-tenancy without losing data", "classification": { "complexity": "multi_file", "difficulty": "hard" }, "want": [4, 6] },
+  { "text": "refactor the payment module to remove duplication, keep the behavior identical", "classification": { "complexity": "multi_file", "difficulty": "normal" }, "want": [2, 3] },
+  { "text": "write unit tests for the date helpers", "classification": { "complexity": "small_edit", "difficulty": "easy" }, "want": [1, 2] }
+]

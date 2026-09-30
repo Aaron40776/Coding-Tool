@@ -14,6 +14,8 @@ export interface StepRecord {
   escalated: boolean;
   usage: Usage;
   outcome: StepOutcome;
+  /** What the rater chose at the start of the step; the learning rule compares it with how the step went. */
+  rated?: { tier: string; effort?: string; score: number };
 }
 
 export interface TaskRecord {

@@ -8,12 +8,19 @@ export interface Classification {
   needsPlan: boolean;
   reason: string;
   /** How much reasoning the task needs, independent of its size. `hard` single tasks go straight to Opus. */
-  difficulty?: 'easy' | 'normal' | 'hard';
+  difficulty?: Difficulty;
   /** A complete answer to a pure question that needs no project files, tools or current information. */
   answer?: string;
   /** True when the classifier output was unusable and defaults were applied. */
   fallback?: boolean;
 }
+
+/** How hard Claude Code thinks (`--effort`), lowest first. */
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type Effort = (typeof EFFORTS)[number];
+
+/** How much reasoning a piece of work needs, independent of its size. */
+export type Difficulty = 'easy' | 'normal' | 'hard';
 
 export interface PlanStep {
   id: string;
@@ -24,6 +31,8 @@ export interface PlanStep {
   skipped?: boolean;
   /** Per-step model tier chosen by the user in the approval screen. */
   tier?: ModelTier;
+  /** The planner's own rating of this step: it knows the plan best. */
+  difficulty?: Difficulty;
 }
 
 export interface Plan {
@@ -40,6 +49,13 @@ export interface RouteDecision {
   /** Concrete model name, read from config. */
   model: string;
   reason: string;
+  /** Thinking effort chosen for this tier (unset for Haiku, or when effort is left at Claude Code's default). */
+  effort?: Effort;
+  /** 0..1 difficulty score from the rater, and how sure it is (0..1). */
+  score?: number;
+  confidence?: number;
+  /** The tier the rater picked, before the warm-cache or limit rules changed it. */
+  ratedTier?: ModelTier;
 }
 
 export interface Usage {

@@ -32,6 +32,7 @@ smart --resume                     # continue a failed or cancelled task from it
 smart --dry-run "add dark mode"    # show the plan and the model per step, run nothing
 smart --model haiku "fix the typo" # force a tier      (--no-plan skips planning, --budget 1.50 caps the cost)
 smart -p "fix the typo" | cat      # headless (--print): reply on stdout, progress on stderr (--output-format json for scripts, --verbose for tool calls)
+smart --rate "fix the race in worker.js"  # show which model and effort it would pick, and why (calls no model)
 smart --no-review "..."            # skip the acceptance review     (--config ./my.json uses another config file)
 smart init                         # write a starter smart.config.json
 ```
@@ -51,8 +52,8 @@ In the app: `Enter` sends, `Esc` cancels, `Tab` switches panel, `@path` adds a f
 ## How it saves usage
 
 - A cheap model classifies every task; a **pure question is answered by that same call**, and "hey" costs one tiny call.
-- **Opus plans, Sonnet builds**: big builds get a short plan from Opus (mid-size ones from Sonnet), then each step runs on the cheapest model that passes your checks. A tricky single task goes straight to Opus. Docs-only changes skip the test run.
-- **Effort follows the task**: low for easy work, more for hard work and retries.
+- **Opus plans, Sonnet builds**: big builds get a short plan from Opus (mid-size ones from Sonnet), then each step runs on the cheapest model and effort its rating allows. A hard step goes to Opus. Docs-only changes skip the test run.
+- **Model and effort come from a rating**, not a fixed table: local signals in your text, the classifier's opinion and, per plan step, the planner's, blended into a score with a confidence. Routine work runs on Sonnet at low effort, hard work on Opus at medium to xhigh. It also learns which rungs worked for you. `smart --rate "your task"` shows the rating and why, for free.
 - Failures **escalate one model at a time**; nothing jumps to Opus by default. Near an account limit, automatic Opus choices drop to Sonnet.
 - Follow-ups reuse one Claude Code session, so "now make it red" has the real history (and Anthropic's prompt cache).
 

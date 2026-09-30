@@ -125,7 +125,7 @@ describe('Pipeline: dry run', () => {
     expect(t.execCalls).toEqual([]);
     const ready = t.of('plan:ready')[0]!;
     expect(Object.values(ready.routes).map((r) => r.tier)).toEqual(['sonnet', 'sonnet']);
-    expect(ready.routes['s1']?.reason).toContain('large_build');
+    expect(ready.routes['s1']?.reason).toContain('rated'); // the rater explains itself
     expect(t.of('step:start')).toHaveLength(0);
   });
 

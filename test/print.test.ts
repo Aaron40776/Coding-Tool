@@ -46,7 +46,7 @@ describe('runPrint', () => {
     expect(code).toBe(0);
     expect(called).toBe(0);
     expect(text(cap.out)).toContain('large_build → sonnet');
-    expect(text(cap.out)).toMatch(/- First \[sonnet\] large_build → sonnet/);
+    expect(text(cap.out)).toMatch(/- First \[sonnet\] sonnet · \w+ · rated \d\.\d\d/); // the rater's reason
   });
 
   it('emits one JSON document with steps, models, usage and the reply', async () => {

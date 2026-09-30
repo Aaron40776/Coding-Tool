@@ -7,9 +7,9 @@ import { defaultConfig, type SmartConfig } from '../../src/core/config.js';
 import { ConversationStore } from '../../src/core/store/conversation.js';
 import { EventBus, type SmartEvent } from '../../src/core/events.js';
 import { SmartError } from '../../src/core/errors.js';
-import { pickEffort, planEffort } from '../../src/core/effort.js';
+import { effortFor, planEffort } from '../../src/core/effort.js';
 import { Pipeline } from '../../src/core/pipeline.js';
-import { emptyUsage, type Complexity } from '../../src/core/types.js';
+import { emptyUsage, type Complexity, type RouteDecision } from '../../src/core/types.js';
 
 interface Call { role: 'classifier' | 'planner' | 'executor'; model: string; prompt: string; session?: { id: string; resume: boolean }; effort?: string; tools?: string[]; lean?: boolean }
 
@@ -51,61 +51,67 @@ const cfg = (over: (c: SmartConfig) => void = () => undefined): SmartConfig => {
   over(c);
   return c;
 };
+const dec = (over: Partial<RouteDecision>): RouteDecision => ({ tier: 'sonnet', model: 'sonnet', reason: 'r', ratedTier: 'sonnet', effort: 'medium', score: 0.3, ...over });
 
-describe('pickEffort', () => {
-  it('is cheap for easy work and grows with complexity', () => {
-    const at = (complexity: Complexity, difficulty?: 'easy' | 'normal' | 'hard') => pickEffort({ tier: 'sonnet', complexity, difficulty, failuresOnTier: 0, config: cfg() });
-    expect(at('trivial')).toBe('low');
-    expect(at('small_edit', 'easy')).toBe('low'); // only what the classifier calls easy runs at low
-    expect(at('small_edit')).toBe('medium');
-    expect(at('small_edit', 'normal')).toBe('medium');
-    expect(at('multi_file')).toBe('medium');
-    expect(at('multi_file', 'easy')).toBe('medium'); // multi-file work keeps a medium level even when it is straightforward
-    expect(at('large_build', 'easy')).toBe('medium');
-    expect(at('small_edit', 'hard')).toBe('high');
+describe('effortFor', () => {
+  it('uses the effort the rater chose with the model', () => {
+    expect(effortFor({ decision: dec({ effort: 'low' }), tier: 'sonnet', failuresOnTier: 0, escalated: false, config: cfg() })).toBe('low');
+    expect(effortFor({ decision: dec({ tier: 'opus', ratedTier: 'opus', effort: 'high', score: 0.85 }), tier: 'opus', failuresOnTier: 0, escalated: false, config: cfg() })).toBe('high');
   });
 
-  it('goes one level up on Opus (except for trivial work) and after a failed attempt, never above high', () => {
-    expect(pickEffort({ tier: 'opus', complexity: 'small_edit', difficulty: 'easy', failuresOnTier: 0, config: cfg() })).toBe('medium');
-    expect(pickEffort({ tier: 'opus', complexity: 'trivial', failuresOnTier: 0, config: cfg() })).toBe('low');
-    expect(pickEffort({ tier: 'sonnet', complexity: 'small_edit', difficulty: 'easy', failuresOnTier: 1, config: cfg() })).toBe('medium');
-    expect(pickEffort({ tier: 'opus', complexity: 'large_build', failuresOnTier: 3, config: cfg() })).toBe('high');
+  it('goes one level up after a failed attempt on the same model, capped at Sonnet high / Opus xhigh', () => {
+    const at = (tier: 'sonnet' | 'opus', effort: RouteDecision['effort']) => effortFor({ decision: dec({ tier, ratedTier: tier, effort }), tier, failuresOnTier: 1, escalated: false, config: cfg() });
+    expect(at('sonnet', 'low')).toBe('medium');
+    expect(at('sonnet', 'medium')).toBe('high');
+    expect(at('sonnet', 'high')).toBe('high');
+    expect(at('opus', 'high')).toBe('xhigh');
+    expect(at('opus', 'xhigh')).toBe('xhigh');
   });
 
-  it('sets nothing for Haiku, and nothing when autoEffort is off', () => {
-    expect(pickEffort({ tier: 'haiku', complexity: 'large_build', failuresOnTier: 2, config: cfg() })).toBeUndefined();
-    expect(pickEffort({ tier: 'sonnet', complexity: 'large_build', failuresOnTier: 0, config: cfg((c) => { c.runner.autoEffort = false; }) })).toBeUndefined();
+  it('after escalating to a stronger model, uses that model\'s effort for the score, one level up', () => {
+    // rated for sonnet at 0.3; the step failed and moved to opus: opus medium is its floor, +1 for the failure
+    expect(effortFor({ decision: dec({ score: 0.3 }), tier: 'opus', failuresOnTier: 0, escalated: true, config: cfg() })).toBe('high');
+    expect(effortFor({ decision: dec({ score: 0.7 }), tier: 'opus', failuresOnTier: 0, escalated: true, config: cfg() })).toBe('high');
   });
 
-  it('lets an explicit runner.effort win', () => {
-    expect(pickEffort({ tier: 'sonnet', complexity: 'trivial', failuresOnTier: 0, config: cfg((c) => { c.runner.effort.sonnet = 'max'; }) })).toBe('max');
-    expect(pickEffort({ tier: 'sonnet', complexity: 'trivial', failuresOnTier: 0, config: cfg((c) => { c.runner.autoEffort = false; c.runner.effort.sonnet = 'high'; }) })).toBe('high');
+  it('recomputes the effort when the warm-cache or limit rules changed the model', () => {
+    // rated opus/high at 0.85, then the usage limit downshifted it to sonnet: sonnet at 0.85 is high
+    expect(effortFor({ decision: dec({ tier: 'sonnet', ratedTier: 'opus', effort: 'high', score: 0.85 }), tier: 'sonnet', failuresOnTier: 0, escalated: false, config: cfg() })).toBe('high');
+    expect(effortFor({ decision: dec({ tier: 'sonnet', ratedTier: 'opus', effort: 'medium', score: 0.1 }), tier: 'sonnet', failuresOnTier: 0, escalated: false, config: cfg() })).toBe('low');
   });
 
-  it('plans large builds at high effort and everything else at medium', () => {
+  it('sets nothing for Haiku or when autoEffort is off, and a pinned level always wins', () => {
+    expect(effortFor({ decision: dec({ tier: 'haiku', ratedTier: 'haiku', effort: undefined }), tier: 'haiku', failuresOnTier: 2, escalated: false, config: cfg() })).toBeUndefined();
+    expect(effortFor({ decision: dec({}), tier: 'sonnet', failuresOnTier: 0, escalated: false, config: cfg((c) => { c.runner.autoEffort = false; }) })).toBeUndefined();
+    expect(effortFor({ decision: dec({}), tier: 'sonnet', failuresOnTier: 0, escalated: false, config: cfg((c) => { c.runner.effort.sonnet = 'max'; }) })).toBe('max');
+    expect(effortFor({ decision: dec({}), tier: 'sonnet', failuresOnTier: 1, escalated: true, config: cfg((c) => { c.runner.autoEffort = false; c.runner.effort.sonnet = 'high'; }) })).toBe('high');
+  });
+
+  it('plans big or hard-looking work at high effort and everything else at medium', () => {
     expect(planEffort('large_build', cfg())).toBe('high');
-    expect(planEffort('multi_file', cfg())).toBe('medium');
+    expect(planEffort('multi_file', cfg(), 0.7)).toBe('high');
+    expect(planEffort('multi_file', cfg(), 0.4)).toBe('medium');
     expect(planEffort('large_build', cfg((c) => { c.runner.autoEffort = false; }))).toBeUndefined();
   });
 });
 
 describe('effort in the pipeline', () => {
-  it('sends effort matching the task to the planner and to each coding step', async () => {
+  it('sends the rated effort to each coding step, and a higher one to the planner for a big build', async () => {
     const t = setup({ complexities: ['large_build'] });
     await t.pipeline.runTask('build a whole app', { autoApprove: true });
     expect(t.calls.find((c) => c.role === 'planner')?.effort).toBe('high');
-    for (const c of t.executors()) expect(c.effort).toBe('medium');
-    expect(t.of('step:start')[0]?.route.reason).toContain('effort medium');
+    for (const c of t.executors()) expect(['low', 'medium', 'high']).toContain(c.effort);
+    expect(t.of('step:start')[0]?.route.reason).toMatch(/rated \d\.\d\d/);
   });
 
-  it('uses low effort for a small edit and none when the task is forced to Haiku', async () => {
-    const small = setup({ complexities: ['small_edit'], classifier: { difficulty: 'easy' } });
-    await small.pipeline.runTask('rename a variable');
-    expect(small.executors()[0]?.effort).toBe('low');
+  it('gives Haiku no effort and lowers effort for an easy edit', async () => {
     const forced = setup({ complexities: ['small_edit'] });
     forced.pipeline.forceModel('haiku');
     await forced.pipeline.runTask('rename a variable');
     expect(forced.executors()[0]?.effort).toBeUndefined();
+    const easy = setup({ complexities: ['small_edit'], classifier: { difficulty: 'easy' } });
+    await easy.pipeline.runTask('fix the typo in the readme');
+    expect(easy.executors()[0]?.effort).toBe('low');
   });
 
   it('thinks harder on a retry before the model changes', async () => {
@@ -113,7 +119,7 @@ describe('effort in the pipeline', () => {
       complexities: ['small_edit'], classifier: { difficulty: 'easy' },
       executor: (_c, n) => { if (n === 1) throw new SmartError('claude', 'boom'); return { isError: false, subtype: 'success', text: 'ok', structured: undefined, usage: emptyUsage(), sessionId: 's', numTurns: 1 }; },
     });
-    await t.pipeline.runTask('rename a variable');
+    await t.pipeline.runTask('fix the typo in the readme');
     const [first, second] = t.executors();
     expect(first?.model).toBe(second?.model);
     expect(first?.effort).toBe('low');

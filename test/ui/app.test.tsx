@@ -38,7 +38,7 @@ describe('App', () => {
     expect(f).toContain('> fix the typo');
     expect(f).toContain('Classified as small_edit');
     expect(f).toContain('Sonnet');
-    expect(f).toContain('small_edit → sonnet');
+    expect(f).toMatch(/sonnet · \w+ · rated \d\.\d\d/); // the rater's reason is shown
     expect(f).toContain('Edit src/a.ts');
     expect(f).toContain('Edited the file.');
     expect(f).toContain('session $0.06');
@@ -51,7 +51,7 @@ describe('App', () => {
     const f = lastFrame()!;
     expect(f).toContain('Dry run');
     expect(f).toContain('Haiku');
-    expect(f).toContain('trivial → haiku');
+    expect(f).toMatch(/haiku · rated \d\.\d\d/);
     expect(f).toContain('[dry-run]');
     expect(executor).not.toHaveBeenCalled();
     void stdin;
@@ -218,12 +218,12 @@ describe('App', () => {
   it('shows /stats history from the tracker and closes with Esc', async () => {
     const ctx = makeApp({ complexity: 'trivial' });
     const { stdin, lastFrame } = render(<App {...ctx} />);
-    await type(stdin, 'first task');
+    await type(stdin, 'what is the first task?');
     await waitFor(() => lastFrame()!.includes('✓ Done'));
     await type(stdin, '/stats');
     await waitFor(() => lastFrame()!.includes('Usage history'));
     expect(lastFrame()).toContain('first task');
-    expect(lastFrame()).toContain('haiku');
+    expect(lastFrame()).toContain('haiku'); // a plain question is rated low enough for Haiku
     stdin.write(KEYS.esc);
     await waitFor(() => !lastFrame()!.includes('Usage history'));
   });

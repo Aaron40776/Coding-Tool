@@ -1,31 +1,30 @@
 import type { SmartConfig } from './config.js';
-import type { Complexity, ModelTier } from './types.js';
-
-export type Effort = 'low' | 'medium' | 'high';
-const LADDER: Effort[] = ['low', 'medium', 'high'];
-const up = (e: Effort, by: number): Effort => LADDER[Math.min(LADDER.length - 1, LADDER.indexOf(e) + by)]!;
-
-const BASE: Record<Complexity, Effort> = { trivial: 'low', small_edit: 'medium', multi_file: 'medium', large_build: 'medium' };
+import { HEAVY_PLAN_SCORE } from './router.js';
+import { bumpEffort, effortAt } from './rating/rate.js';
+import type { Complexity, Effort, ModelTier, RouteDecision } from './types.js';
 
 /**
- * How hard the model should think for a coding step. Cheap where the work is easy, more where it is not:
- * base from the task's complexity and difficulty (`low` for trivial work and for small changes the classifier calls easy), one level up on Opus (it was chosen because the step is hard) and one level up
- * after a failed attempt on the same model (think harder before paying for a bigger model).
- * Haiku gets no setting (it has no thinking budget to tune). An explicit `runner.effort[tier]` in the config always wins.
+ * The thinking effort for one attempt of a coding step. The rater already chose an effort with the model
+ * (`decision.effort`, from the score); this adjusts it for what happened since:
+ *   - a pinned `runner.effort[tier]` always wins;
+ *   - Haiku has no setting, and `runner.autoEffort: false` leaves Claude Code's default;
+ *   - after a failed attempt on the same model, one level up (think harder before paying for a bigger model);
+ *   - after escalating to a stronger model, that model's effort for the score, one level up (the step already failed once).
+ * If the warm-cache or usage-limit rules changed the model, the effort is recomputed for the model actually used.
  */
-export function pickEffort(a: { tier: ModelTier; complexity: Complexity; difficulty?: 'easy' | 'normal' | 'hard'; failuresOnTier: number; config: SmartConfig }): Effort | undefined {
-  const explicit = a.config.runner.effort[a.tier];
-  if (explicit) return explicit as Effort;
+export function effortFor(a: { decision: RouteDecision; tier: ModelTier; failuresOnTier: number; escalated: boolean; config: SmartConfig }): Effort | undefined {
+  const pinned = a.config.runner.effort[a.tier];
+  if (pinned) return pinned as Effort;
   if (!a.config.runner.autoEffort || a.tier === 'haiku') return undefined;
-  // Only trivial work and small changes the classifier calls easy run at low effort; everything else starts at medium so quality does not suffer.
-  let e: Effort = a.difficulty === 'easy' && a.complexity === 'small_edit' ? 'low' : BASE[a.complexity];
-  if (a.tier === 'opus' && a.complexity !== 'trivial') e = up(e, 1);
-  if (a.difficulty === 'hard') e = up(e, 1);
-  return up(e, Math.min(a.failuresOnTier, 1));
+  const score = a.decision.score ?? 0.5;
+  const rated = a.tier === a.decision.ratedTier ? a.decision.effort : undefined;
+  let e = rated ?? effortAt(a.tier, score);
+  if (a.escalated || a.failuresOnTier > 0) e = bumpEffort(e, a.tier);
+  return e;
 }
 
 /** Planning is where thinking pays off most: the plan decides how easy every later step is. */
-export function planEffort(complexity: Complexity, config: SmartConfig): Effort | undefined {
+export function planEffort(complexity: Complexity, config: SmartConfig, score?: number): Effort | undefined {
   if (!config.runner.autoEffort) return undefined;
-  return complexity === 'large_build' ? 'high' : 'medium';
+  return complexity === 'large_build' || (score !== undefined && score >= HEAVY_PLAN_SCORE) ? 'high' : 'medium';
 }

@@ -218,7 +218,7 @@ describe('effort and budget', () => {
     expect(t.executors()[0]?.effort).toBe('high'); // an explicit setting beats the automatic choice
     const auto = setup();
     await auto.pipeline.runTask('x');
-    expect(auto.executors()[0]?.effort).toBe('medium'); // an ordinary small edit on Sonnet
+    expect(auto.executors()[0]?.effort).toBe('low'); // a one-word, unremarkable request is rated low
     const off = setup({ config: (c) => { c.runner.autoEffort = false; } });
     await off.pipeline.runTask('x');
     expect(off.executors()[0]?.effort).toBeUndefined();

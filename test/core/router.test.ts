@@ -47,7 +47,7 @@ describe('route', () => {
   it('ignores an invalid regex instead of throwing', () => {
     const c = cfg();
     c.routing.keywordRules = [{ match: '(', tier: 'opus' }];
-    expect(route({ classification: cls('trivial'), text: '(' }, c).tier).toBe('haiku');
+    expect(route({ classification: cls('trivial'), text: 'what is a monad' }, c).tier).toBe('haiku');
   });
 });
 
