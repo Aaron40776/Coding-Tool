@@ -8,12 +8,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GitCheckpoints } from '../../src/core/checkpoint.js';
 import { isAuthFailure, runClaude } from '../../src/core/claude.js';
 import { expandHome, loadConfig } from '../../src/core/config.js';
-import { ConversationStore, newConversation } from '../../src/core/conversation.js';
+import { ConversationStore, newConversation } from '../../src/core/store/conversation.js';
 import { projectFiles } from '../../src/core/files.js';
-import { InputHistory } from '../../src/core/inputHistory.js';
+import { InputHistory } from '../../src/core/store/inputHistory.js';
 import { gatherFiles } from '../../src/core/runner.js';
-import { LimitsStore } from '../../src/core/usage.js';
-import { Tracker } from '../../src/core/tracker.js';
+import { LimitsStore } from '../../src/core/store/limits.js';
+import { Tracker } from '../../src/core/store/tracker.js';
 
 const dir = (p = 'smart-bf-') => mkdtempSync(join(tmpdir(), p));
 const sh = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' });

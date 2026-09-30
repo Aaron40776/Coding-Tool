@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { billable, summarize } from '../../src/core/stats.js';
-import type { StepRecord, TaskRecord } from '../../src/core/tracker.js';
+import type { StepRecord, TaskRecord } from '../../src/core/store/tracker.js';
 import { emptyUsage, type Usage } from '../../src/core/types.js';
 
 const NOW = new Date(2026, 5, 15, 14, 0, 0).getTime(); // a fixed local time

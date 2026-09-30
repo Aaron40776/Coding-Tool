@@ -5,20 +5,22 @@ import { resolvePermissionMode } from './claude.js';
 import { NoCheckpoints, type Changes, type Checkpointer } from './checkpoint.js';
 import { classify } from './classifier.js';
 import type { SmartConfig } from './config.js';
-import { newConversation, recordTask, renderMemory, type Conversation, type ConversationStore, type PendingTask } from './conversation.js';
+import { newConversation, recordTask, renderMemory, type Conversation, type ConversationStore, type PendingTask } from './store/conversation.js';
 import { EventBus, type Stage } from './events.js';
 import { SmartError, cancelled, isCancelled } from './errors.js';
 import { projectContext, projectFiles } from './files.js';
 import { resolveMentions } from './mentions.js';
+import { describeConfig } from './describe.js';
 import { pickEffort, planEffort } from './effort.js';
 import { CHAT_SYSTEM, isSmallTalk } from './smalltalk.js';
 import { makePlan, singleStepPlan } from './planner.js';
 import { applyWarmCache, route } from './router.js';
 import { reviewStep } from './review.js';
 import { gatherFiles, runStep } from './runner.js';
-import type { StepOutcome, StepRecord, TaskRecord, Tracker } from './tracker.js';
+import type { StepOutcome, StepRecord, TaskRecord, Tracker } from './store/tracker.js';
 import { addUsage, emptyUsage, type Classification, type Limits, type ModelTier, type Plan, type PlanStep, type RouteDecision, type Usage } from './types.js';
-import { applyLimitPressure, fmtReset, LimitsStore, pct, tightest, windowLabel } from './usage.js';
+import { LimitsStore } from './store/limits.js';
+import { applyLimitPressure, fmtReset, pct, windowLabel } from './usage.js';
 import { detectChecks, nextAttempt, runChecks, type ExecFn } from './verifier.js';
 
 export interface PipelineDeps {
@@ -497,18 +499,7 @@ export class Pipeline {
 
   /** Human-readable effective configuration, for /config. */
   describe(): string[] {
-    const c = this.config;
-    const r = c.routing;
-    const t = tightest(this.limits);
-    return [
-      `Models: haiku=${c.models.haiku}, sonnet=${c.models.sonnet}, opus=${c.models.opus}`,
-      `Routing: trivial→${r.trivial}, small_edit→${r.small_edit}, multi_file→${r.multi_file}, large_build→${r.large_build}; classifier ${r.classifier}, planner ${r.planner}, reviewer ${r.reviewer}`,
-      r.keywordRules.length ? `Keyword rules: ${r.keywordRules.map((k) => `/${k.match}/→${k.tier}`).join(', ')}` : 'Keyword rules: none',
-      `Escalation: retry ${c.escalation.retriesPerModel}× per model, then ${c.escalation.ladder.join(' → ')}`,
-      `Review: ${c.review.enabled ? `on (${r.reviewer})` : 'off'} · Session resume: ${c.session.resume ? 'on' : 'off'} · Warm-cache hold: ${c.session.keepWarmTier ? `on (${c.session.cacheTtlSec}s)` : 'off'}`,
-      `Permission mode: ${this.permissionMode}${this.permOverride ? ' (set with /mode)' : ''} · Limits: plan ≤${c.limits.maxPlanSteps} steps, budget/step ${c.limits.maxBudgetUsdPerStep ?? 'none'}, budget/task ${c.limits.maxBudgetUsdPerTask ?? 'none'}`,
-      `Usage guard: avoid Opus at ≥${pct(c.usage.downshiftAt)}, warn at ≥${pct(c.usage.warnAt)}${t ? ` (now ${windowLabel(t.name)} ${pct(t.window.utilization)})` : ''}`,
-    ];
+    return describeConfig(this.config, { permissionMode: this.permissionMode, modeOverridden: this.permOverride !== null, limits: this.limits });
   }
 
   private emitConversation(): void {

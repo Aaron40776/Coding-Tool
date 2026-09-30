@@ -12,6 +12,15 @@ npm run dev        # run from source (needs the `claude` CLI, logged in)
 ```
 Node.js 20+ is required. Windows, macOS and Linux are all supported; CI runs on Windows and Ubuntu.
 
+## Layout
+```
+src/core/     the engine, no UI imports: pipeline (orchestrator), classifier, planner, router, runner, verifier, review,
+              effort, smalltalk, checkpoint (git undo), claude (the only place that spawns `claude`), config, events
+src/core/store/   files under ~/.smart: tracker (history), conversation, inputHistory, limits, atomicFile (lock + atomic write)
+src/ui/       Ink components and the state reducer; src/cli.tsx and src/print.ts are the entry points
+test/         mirrors src; test/fixtures/fake-claude.mjs stands in for the CLI
+```
+
 ## Ground rules
 - **`src/core` must not import UI code** (React/Ink). It emits events; frontends subscribe. ESLint enforces this.
 - **`src/core/claude.ts` is the only place that spawns `claude`.** Everything else takes a `RunClaudeFn`, so tests mock Claude.

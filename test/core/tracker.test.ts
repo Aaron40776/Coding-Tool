@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { Tracker, type StepRecord, type TaskRecord } from '../../src/core/tracker.js';
+import { Tracker, type StepRecord, type TaskRecord } from '../../src/core/store/tracker.js';
 import { emptyUsage } from '../../src/core/types.js';
 
 const usage = (costUsd: number, out = 10) => ({ ...emptyUsage(), costUsd, outputTokens: out });

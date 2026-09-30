@@ -7,7 +7,7 @@ import { defaultConfig, type SmartConfig } from '../../src/core/config.js';
 import { EventBus, type SmartEvent } from '../../src/core/events.js';
 import { Pipeline } from '../../src/core/pipeline.js';
 import { emptyUsage, type Complexity, type Limits } from '../../src/core/types.js';
-import { LimitsStore } from '../../src/core/usage.js';
+import { LimitsStore } from '../../src/core/store/limits.js';
 
 const NOW = 1_800_000_000_000;
 

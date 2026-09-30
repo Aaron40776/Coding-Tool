@@ -1,8 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { withFileLock } from './lock.js';
-import type { Classification, Usage } from './types.js';
+import { existsSync, readFileSync } from 'node:fs';
+import type { Classification, Usage } from '../types.js';
+import { quarantineCorrupt, withFileLock, writeFileAtomic } from './atomicFile.js';
 
 export type StepOutcome = 'done' | 'failed' | 'cancelled' | 'skipped';
 
@@ -48,12 +46,7 @@ export class Tracker {
       const data = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<HistoryFile>;
       return Array.isArray(data.tasks) ? data.tasks : [];
     } catch {
-      // Corrupt file: keep it for inspection and start fresh rather than crash.
-      try {
-        renameSync(this.path, `${this.path}.corrupt-${Date.now()}`);
-      } catch {
-        /* ignore */
-      }
+      quarantineCorrupt(this.path); // keep it for inspection and start fresh rather than crash
       return [];
     }
   }
@@ -63,10 +56,7 @@ export class Tracker {
     try {
       withFileLock(this.path, () => {
         const tasks = [...this.load(), { ...record, prompt: record.prompt.slice(0, MAX_PROMPT) }].slice(-MAX_TASKS);
-        mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-        const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`; // unique: two smart sessions must not share a temp file
-        writeFileSync(tmp, JSON.stringify({ version: 1, tasks } satisfies HistoryFile, null, 2), { mode: 0o600 });
-        renameSync(tmp, this.path);
+        writeFileAtomic(this.path, JSON.stringify({ version: 1, tasks } satisfies HistoryFile, null, 2));
       });
       return null;
     } catch (e) {

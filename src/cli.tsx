@@ -8,14 +8,14 @@ import { expandHome, loadConfig } from './core/config.js';
 import { EventBus } from './core/events.js';
 import { SmartError } from './core/errors.js';
 import { createCheckpoints } from './core/checkpoint.js';
-import { ConversationStore } from './core/conversation.js';
-import { InputHistory } from './core/inputHistory.js';
+import { ConversationStore } from './core/store/conversation.js';
+import { InputHistory } from './core/store/inputHistory.js';
 import { Pipeline } from './core/pipeline.js';
 import { isTier } from './core/router.js';
 import { initConfig } from './init.js';
 import { runPrint } from './print.js';
-import { Tracker } from './core/tracker.js';
-import { LimitsStore } from './core/usage.js';
+import { Tracker } from './core/store/tracker.js';
+import { LimitsStore } from './core/store/limits.js';
 import type { ModelTier } from './core/types.js';
 import { App } from './ui/App.js';
 

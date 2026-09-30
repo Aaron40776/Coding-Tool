@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { withFileLock } from './lock.js';
-import type { Classification, Complexity, ModelTier, Plan } from './types.js';
+import { existsSync, readFileSync } from 'node:fs';
+import type { Classification, Complexity, ModelTier, Plan } from '../types.js';
+import { quarantineCorrupt, withFileLock, writeFileAtomic } from './atomicFile.js';
 
 export interface TaskMemory {
   prompt: string;
@@ -100,12 +99,7 @@ export class ConversationStore {
       const d = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<StoreFile>;
       return { version: 1, byDir: d.byDir && typeof d.byDir === 'object' ? d.byDir : {} };
     } catch {
-      // Corrupt file: keep it for inspection rather than silently overwriting it on the next save.
-      try {
-        renameSync(this.path, `${this.path}.corrupt-${Date.now()}`);
-      } catch {
-        /* ignore */
-      }
+      quarantineCorrupt(this.path); // keep it for inspection rather than silently overwriting it on the next save
       return { version: 1, byDir: {} };
     }
   }
@@ -125,10 +119,7 @@ export class ConversationStore {
         // Keep the file small: only the 50 most recently used directories.
         const keep = Object.entries(file.byDir).sort((a, b) => b[1].updatedAt.localeCompare(a[1].updatedAt)).slice(0, 50);
         file.byDir = Object.fromEntries(keep);
-        mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-        const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`; // unique: two smart sessions must not share a temp file
-        writeFileSync(tmp, JSON.stringify(file, null, 2), { mode: 0o600 });
-        renameSync(tmp, this.path);
+        writeFileAtomic(this.path, JSON.stringify(file, null, 2));
       });
       return null;
     } catch (e) {

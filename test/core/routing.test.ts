@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ClaudeResult, RunClaudeFn } from '../../src/core/claude.js';
 import { defaultConfig, type SmartConfig } from '../../src/core/config.js';
-import { ConversationStore } from '../../src/core/conversation.js';
+import { ConversationStore } from '../../src/core/store/conversation.js';
 import { EventBus, type SmartEvent } from '../../src/core/events.js';
 import { SmartError } from '../../src/core/errors.js';
 import { parseClassification } from '../../src/core/classifier.js';
@@ -231,7 +231,7 @@ describe('review fixes', () => {
 describe('finishing a task', () => {
   it('saves the cost record before the frontend is told the task failed or was cancelled', async () => {
     const order: string[] = [];
-    const tracker = { append: () => { order.push('tracker'); return null; }, load: () => [] } as unknown as import('../../src/core/tracker.js').Tracker;
+    const tracker = { append: () => { order.push('tracker'); return null; }, load: () => [] } as unknown as import('../../src/core/store/tracker.js').Tracker;
     const t = setup({ executor: () => { throw new SmartError('auth', 'not logged in'); } });
     // rebuild a pipeline that has a tracker, sharing the scripted claude
     const { pipeline, events } = (() => {

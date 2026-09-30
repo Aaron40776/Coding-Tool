@@ -1,4 +1,4 @@
-import type { TaskRecord } from './tracker.js';
+import type { TaskRecord } from './store/tracker.js';
 import type { Usage } from './types.js';
 
 export const billable = (u: Usage): number => u.inputTokens + u.cacheCreationTokens + u.outputTokens;
@@ -76,8 +76,6 @@ export function summarize(tasks: TaskRecord[], opts: { now: number }): Summary {
     top: [...tasks].sort((a, b) => b.totals.costUsd - a.totals.costUsd).slice(0, 3).map((t) => ({ prompt: t.prompt, cost: t.totals.costUsd, ok: t.ok })),
   };
 }
-
-export const emptySummary = (): Summary => summarize([], { now: Date.now() });
 
 const money = (n: number): string => (n > 0 && n < 0.01 ? '<$0.01' : `$${n.toFixed(n >= 10 ? 1 : 2)}`);
 
