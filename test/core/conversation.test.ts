@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ConversationStore, newConversation, recordTask, renderMemory, type TaskMemory } from '../../src/core/conversation.js';
+import { ConversationStore, newConversation, recordTask, renderMemory, type TaskMemory } from '../../src/core/store/conversation.js';
 
 const task = (over: Partial<TaskMemory> = {}): TaskMemory => ({ prompt: 'make a snake game', outcome: 'done', files: ['index.html'], reply: 'Created the game.', at: '2026-01-01', ...over });
 

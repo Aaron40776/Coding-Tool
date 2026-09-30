@@ -1,12 +1,9 @@
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
 import type { SmartConfig } from './config.js';
 import type { Limits, LimitWindow, RouteDecision } from './types.js';
 import { modelFor } from './router.js';
 
 /** The two windows Claude reports for subscriptions. Other windows, if any, are still kept. */
-export const WINDOW_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d' };
+const WINDOW_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d' };
 export const windowLabel = (name: string): string => WINDOW_LABEL[name] ?? name.replace(/_/g, ' ');
 
 export const pct = (u: number): string => `${Math.round(u * 100)}%`;
@@ -52,33 +49,6 @@ export function applyLimitPressure(decision: RouteDecision, limits: Limits | nul
     reason: `${decision.reason}; ${windowLabel(t.name)} limit at ${pct(t.window.utilization)} so using sonnet instead of opus`,
     source: 'session',
   };
-}
-
-/** Last-seen account limits, kept between runs so the header is not empty before the first call. Never throws. */
-export class LimitsStore {
-  constructor(private readonly path: string) {}
-
-  load(): Limits | null {
-    try {
-      if (!existsSync(this.path)) return null;
-      const d = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<Limits>;
-      if (!d || typeof d.at !== 'number' || typeof d.windows !== 'object' || d.windows === null) return null;
-      return { windows: d.windows, status: d.status, at: d.at };
-    } catch {
-      return null;
-    }
-  }
-
-  save(limits: Limits): void {
-    try {
-      mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-      const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`; // unique: two smart sessions must not share a temp file
-      writeFileSync(tmp, JSON.stringify(limits), { mode: 0o600 });
-      renameSync(tmp, this.path);
-    } catch {
-      /* a convenience only */
-    }
-  }
 }
 
 export const bar = (share: number, width = 10): string => {

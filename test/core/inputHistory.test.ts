@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { InputHistory } from '../../src/core/inputHistory.js';
+import { InputHistory } from '../../src/core/store/inputHistory.js';
 
 const path = () => join(mkdtempSync(join(tmpdir(), 'smart-hist-')), 'sub', 'h.json');
 

@@ -1,7 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { withFileLock } from './lock.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { withFileLock, writeFileAtomic } from './atomicFile.js';
 
 const MAX = 200;
 
@@ -27,10 +25,7 @@ export class InputHistory {
         const all = this.load();
         if (all.at(-1) === t) return;
         all.push(t);
-        mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-        const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`; // unique: two smart sessions must not share a temp file
-        writeFileSync(tmp, JSON.stringify(all.slice(-MAX)), { mode: 0o600 });
-        renameSync(tmp, this.path);
+        writeFileAtomic(this.path, JSON.stringify(all.slice(-MAX)));
       });
     } catch {
       /* history is a convenience; ignore write failures */

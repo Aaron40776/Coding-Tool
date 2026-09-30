@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ClaudeResult, RunClaudeFn } from '../../src/core/claude.js';
 import { defaultConfig, type SmartConfig } from '../../src/core/config.js';
-import { ConversationStore } from '../../src/core/conversation.js';
+import { ConversationStore } from '../../src/core/store/conversation.js';
 import { EventBus, type SmartEvent } from '../../src/core/events.js';
 import { SmartError } from '../../src/core/errors.js';
 import { isSmallTalk } from '../../src/core/smalltalk.js';

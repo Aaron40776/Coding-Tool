@@ -6,7 +6,7 @@ import { runClaude } from '../../src/core/claude.js';
 import { defaultConfig } from '../../src/core/config.js';
 import { EventBus } from '../../src/core/events.js';
 import { Pipeline } from '../../src/core/pipeline.js';
-import { Tracker } from '../../src/core/tracker.js';
+import { Tracker } from '../../src/core/store/tracker.js';
 
 /**
  * Real end-to-end check against the installed `claude` CLI. It spends a few cents of your usage,

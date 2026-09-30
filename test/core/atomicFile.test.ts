@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { withFileLock } from '../../src/core/lock.js';
+import { quarantineCorrupt, withFileLock, writeFileAtomic } from '../../src/core/store/atomicFile.js';
 import { projectRelative } from '../../src/core/runner.js';
-import { InputHistory } from '../../src/core/inputHistory.js';
+import { InputHistory } from '../../src/core/store/inputHistory.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'smart-lock-'));
 
@@ -35,7 +35,7 @@ describe('withFileLock', () => {
   it('keeps concurrent smart sessions from losing each other\'s history entries', async () => {
     const file = join(tmp(), 'input-history.json');
     const script = join(tmp(), 'writer.ts');
-    const src = fileURLToPath(new URL('../../src/core/inputHistory.ts', import.meta.url));
+    const src = fileURLToPath(new URL('../../src/core/store/inputHistory.ts', import.meta.url));
     writeFileSync(script, `import { InputHistory } from ${JSON.stringify(src)};\nconst h = new InputHistory(process.argv[2]!);\nfor (let i = 0; i < 8; i++) h.push(process.argv[3] + '-' + i);\n`);
     const tsx = fileURLToPath(new URL('../../node_modules/tsx/dist/cli.mjs', import.meta.url));
     const run = (id: string) => new Promise<void>((resolve, reject) => {
@@ -46,6 +46,27 @@ describe('withFileLock', () => {
     await Promise.all(['a', 'b', 'c', 'd'].map(run));
     expect(new InputHistory(file).load()).toHaveLength(32);
   }, 60_000);
+});
+
+describe('writeFileAtomic / quarantineCorrupt', () => {
+  it('creates missing directories, replaces the file whole and leaves no temp files behind', () => {
+    const d = tmp();
+    const f = join(d, 'deep', 'er', 'x.json');
+    writeFileAtomic(f, '{"a":1}');
+    writeFileAtomic(f, '{"a":2}');
+    expect(readFileSync(f, 'utf8')).toBe('{"a":2}');
+    expect(readdirSync(join(d, 'deep', 'er'))).toEqual(['x.json']);
+  });
+
+  it('moves a corrupt file aside and does not throw when there is nothing to move', () => {
+    const d = tmp();
+    const f = join(d, 'bad.json');
+    writeFileSync(f, '{oops');
+    quarantineCorrupt(f);
+    expect(existsSync(f)).toBe(false);
+    expect(readdirSync(d).some((n) => n.startsWith('bad.json.corrupt-'))).toBe(true);
+    expect(() => quarantineCorrupt(join(d, 'missing.json'))).not.toThrow();
+  });
 });
 
 describe('projectRelative', () => {

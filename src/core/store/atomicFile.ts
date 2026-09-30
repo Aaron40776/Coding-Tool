@@ -1,4 +1,5 @@
-import { mkdirSync, rmdirSync, statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, renameSync, rmdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 const sleep = (ms: number): void => {
@@ -44,5 +45,25 @@ export function withFileLock<T>(file: string, fn: () => T): T {
         /* already gone */
       }
     }
+  }
+}
+
+/**
+ * Writes `text` so a reader never sees half a file: a uniquely named temp file (two smart sessions must not share one),
+ * then a rename. Owner-only permissions, since history and conversations contain your prompts.
+ */
+export function writeFileAtomic(file: string, text: string): void {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(tmp, text, { mode: 0o600 });
+  renameSync(tmp, file);
+}
+
+/** Moves an unreadable file aside (`file.corrupt-<time>`) instead of overwriting it on the next save. Never throws. */
+export function quarantineCorrupt(file: string): void {
+  try {
+    renameSync(file, `${file}.corrupt-${Date.now()}`);
+  } catch {
+    /* nothing more to do */
   }
 }

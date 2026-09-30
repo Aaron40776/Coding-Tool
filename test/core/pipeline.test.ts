@@ -7,7 +7,7 @@ import { defaultConfig, type SmartConfig } from '../../src/core/config.js';
 import { EventBus, type SmartEvent } from '../../src/core/events.js';
 import { SmartError } from '../../src/core/errors.js';
 import { Pipeline } from '../../src/core/pipeline.js';
-import { Tracker } from '../../src/core/tracker.js';
+import { Tracker } from '../../src/core/store/tracker.js';
 import { emptyUsage, type Complexity } from '../../src/core/types.js';
 import type { ExecFn } from '../../src/core/verifier.js';
 

@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { StreamParser } from '../../src/core/claude.js';
 import { defaultConfig } from '../../src/core/config.js';
 import { route } from '../../src/core/router.js';
-import { applyLimitPressure, fmtReset, LimitsStore, pct, pressure, tightest, windowLabel } from '../../src/core/usage.js';
+import { LimitsStore } from '../../src/core/store/limits.js';
+import { applyLimitPressure, fmtReset, pct, pressure, tightest, windowLabel } from '../../src/core/usage.js';
 import type { Limits } from '../../src/core/types.js';
 
 const limits = (five: number, seven = 0.1): Limits => ({ at: 1000, windows: { five_hour: { utilization: five, resetsAt: 4_000_000_000 }, seven_day: { utilization: seven } } });

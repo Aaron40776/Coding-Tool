@@ -2,7 +2,6 @@ export type Complexity = 'trivial' | 'small_edit' | 'multi_file' | 'large_build'
 export const COMPLEXITIES: readonly Complexity[] = ['trivial', 'small_edit', 'multi_file', 'large_build'];
 
 export type ModelTier = 'haiku' | 'sonnet' | 'opus';
-export const TIERS: readonly ModelTier[] = ['haiku', 'sonnet', 'opus'];
 
 export interface Classification {
   complexity: Complexity;
