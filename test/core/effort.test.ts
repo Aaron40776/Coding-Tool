@@ -60,7 +60,7 @@ describe('pickEffort', () => {
     expect(at('small_edit')).toBe('medium');
     expect(at('small_edit', 'normal')).toBe('medium');
     expect(at('multi_file')).toBe('medium');
-    expect(at('multi_file', 'easy')).toBe('low');
+    expect(at('multi_file', 'easy')).toBe('medium'); // multi-file work keeps a medium level even when it is straightforward
     expect(at('large_build', 'easy')).toBe('medium');
     expect(at('small_edit', 'hard')).toBe('high');
   });

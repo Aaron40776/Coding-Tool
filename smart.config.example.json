@@ -5,15 +5,19 @@
     "small_edit": "sonnet",
     "multi_file": "sonnet",
     "large_build": "sonnet",
-    "planner": "opus",
-    "classifier": "haiku",
+    "planner": "opus", "plannerLight": "sonnet",
+    "classifier": "haiku", "reviewer": "haiku",
     "keywordRules": [{ "match": "architecture|race condition|deadlock", "tier": "opus" }]
   },
   "escalation": { "retriesPerModel": 1, "ladder": ["haiku", "sonnet", "opus"] },
-  "limits": { "maxPlanSteps": 8, "maxContextBytes": 40000, "maxBudgetUsdPerStep": null, "maxBudgetUsdPerTask": null },
+  "limits": { "maxPlanSteps": 6, "maxContextBytes": 40000, "maxBudgetUsdPerStep": null, "maxBudgetUsdPerTask": null },
   "session": { "resume": true, "cacheTtlSec": 300, "keepWarmTier": true },
   "runner": { "permissionMode": "bypassPermissions", "bare": false, "leanCalls": true, "autoEffort": true, "extraArgs": [], "effort": {} },
+  "review": { "enabled": true },
   "usage": { "downshiftAt": 0.9, "warnAt": 0.8 },
   "verify": { "auto": true, "commands": [], "timeoutSec": 300 },
-  "trackerPath": "~/.smart/history.json"
+  "trackerPath": "~/.smart/history.json",
+  "conversationsPath": "~/.smart/conversations.json",
+  "limitsPath": "~/.smart/limits.json",
+  "historyPath": "~/.smart/input-history.json"
 }

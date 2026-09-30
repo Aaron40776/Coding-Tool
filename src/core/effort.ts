@@ -17,8 +17,8 @@ export function pickEffort(a: { tier: ModelTier; complexity: Complexity; difficu
   const explicit = a.config.runner.effort[a.tier];
   if (explicit) return explicit as Effort;
   if (!a.config.runner.autoEffort || a.tier === 'haiku') return undefined;
-  // Only work the classifier calls easy runs at low effort; an ordinary edit keeps a medium level so quality does not suffer.
-  let e: Effort = a.difficulty === 'easy' && a.complexity !== 'large_build' ? 'low' : BASE[a.complexity];
+  // Only trivial work and small changes the classifier calls easy run at low effort; everything else starts at medium so quality does not suffer.
+  let e: Effort = a.difficulty === 'easy' && a.complexity === 'small_edit' ? 'low' : BASE[a.complexity];
   if (a.tier === 'opus' && a.complexity !== 'trivial') e = up(e, 1);
   if (a.difficulty === 'hard') e = up(e, 1);
   return up(e, Math.min(a.failuresOnTier, 1));

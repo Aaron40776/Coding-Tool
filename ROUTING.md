@@ -6,7 +6,7 @@ decision is shown in the UI with its reason (for example `multi_file → sonnet`
 ## The pipeline
 
 1. **Classify** (cheap model, default Haiku). Scores your prompt as one of four complexities, says whether it needs a plan and how hard it is (`easy`, `normal`, `hard`). If the prompt is a pure question that needs none of your files, tools or current information, the classifier **answers it in the same call**: one Haiku call in total, no coding session. Greetings ("hey", "thanks") skip even the classifier.
-2. **Plan** (default Opus), only when the task needs one. A large build always does. `--no-plan` turns this off.
+2. **Plan**, only when the task needs one (a large build always does; `--no-plan` turns this off). Big builds and `hard` tasks are planned by Opus (`routing.planner`); mid-size, multi-part changes by Sonnet (`routing.plannerLight`): about 2× faster and 5× cheaper, and plenty for a short plan. Plans are kept to a few substantial steps (`limits.maxPlanSteps`, default 6), because every step is a separate Claude Code call.
 3. **Route** every step to a model.
 4. **Execute** each step with a lean prompt, then **verify** it (tests, lint, build).
 5. **Escalate** a step that keeps failing to the next model up.
@@ -20,7 +20,7 @@ decision is shown in the UI with its reason (for example `multi_file → sonnet`
 | `multi_file` | a feature or fix across several files | sonnet |
 | `large_build` | building an app or big system from scratch | sonnet (planned by opus) |
 
-The planner and classifier have their own roles (`routing.planner`, `routing.classifier`).
+The planner, classifier and reviewer have their own roles (`routing.planner`, `routing.plannerLight`, `routing.classifier`, `routing.reviewer`).
 
 ## Precedence
 
@@ -76,7 +76,7 @@ After a step runs, `smart` runs your checks. If they fail:
 
 Checks are auto-detected from `package.json` scripts, in cheapest-first order: `typecheck`, `lint`, `build`, `test`
 (npm's placeholder test script is ignored). Override them with `verify.commands`, for example `["pytest -q", "ruff check ."]`.
-A question that changed no files is not verified.
+A question that changed no files is not verified, and neither is a change that only touched prose or images (`.md`, `.txt`, `.png`, ...): there is nothing for a build or test to break. Config files such as `package.json` are still checked.
 
 ## Tuning
 
@@ -85,7 +85,7 @@ Copy `smart.config.example.json` to `./smart.config.json` (or `~/.smart/smart.co
 **Spend less**
 - Send more work to a cheaper model: `"routing": { "multi_file": "haiku" }`.
 - Escalation is your safety net, so an aggressive downgrade costs little when checks exist. Without checks there is no signal to escalate on, so keep Sonnet.
-- Lower `limits.maxPlanSteps`. Every step is a separate Claude Code call, and each call carries Claude Code's own base context.
+- Lower `limits.maxPlanSteps` (default 6). Every step is a separate Claude Code call, and each call carries Claude Code's own base context.
 - Set `limits.maxBudgetUsdPerStep` to cap a runaway step.
 
 **Cap spending**: `limits.maxBudgetUsdPerTask` stops a task once its total cost reaches that many dollars; `limits.maxBudgetUsdPerStep` caps one step.
