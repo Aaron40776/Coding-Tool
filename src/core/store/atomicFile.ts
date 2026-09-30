@@ -7,6 +7,15 @@ const sleep = (ms: number): void => {
 };
 
 /**
+ * Whether a failed `mkdir` of the lock means "someone holds it, try again". On Windows, creating a directory that another
+ * process has just deleted (or is deleting) fails with EPERM/EACCES/EBUSY instead of EEXIST; treating that as "no lock
+ * possible" let two sessions run unlocked and lose an update.
+ */
+export function lockBusy(code: string | undefined, platform: NodeJS.Platform = process.platform): boolean {
+  return code === 'EEXIST' || (platform === 'win32' && (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'));
+}
+
+/**
  * Runs `fn` while holding a lock directory next to `file`, so two smart sessions doing read-modify-write on the same
  * JSON file (history, conversations, prompt history) do not overwrite each other's update. `mkdir` is atomic on every
  * platform. A lock older than 10 s is treated as abandoned, and after ~3 s of waiting `fn` runs anyway: a stuck lock
@@ -23,7 +32,7 @@ export function withFileLock<T>(file: string, fn: () => T): T {
         held = true;
         break;
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') break;
+        if (!lockBusy((e as NodeJS.ErrnoException).code)) break;
         try {
           if (Date.now() - statSync(lock).mtimeMs > 10_000) rmdirSync(lock);
         } catch {
@@ -39,10 +48,15 @@ export function withFileLock<T>(file: string, fn: () => T): T {
     return fn();
   } finally {
     if (held) {
-      try {
-        rmdirSync(lock);
-      } catch {
-        /* already gone */
+      // On Windows a just-created directory can be briefly busy (antivirus, indexer): retry, or every other session waits out the timeout.
+      for (let i = 0; i < 20; i++) {
+        try {
+          rmdirSync(lock);
+          break;
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === 'ENOENT') break;
+          sleep(10);
+        }
       }
     }
   }

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix (Windows): the file lock that keeps several smart sessions from overwriting each other's history could let two of them run unlocked, because Windows reports "directory is being deleted" as EPERM/EACCES/EBUSY instead of "exists"; that is now retried, as is a briefly busy lock removal. Found by CI on `main` (one of 32 concurrent history entries lost on Windows/Node 22).
 - Speed: a lone edit rated easy ("fix the typo in the readme") is no longer sent to the reviewer: in a live run the review call took 11.6 s, longer than the 9.3 s edit, for nothing to check. Plan steps and anything not rated easy are still reviewed.
 - **Every phase picks its own model and effort.** Classify: routine one-line edits ("fix the typo in the README") are recognised locally and skip the classifier call (`routing.fastLane`). Answer: an easy question is still answered by the classifier; a question the rater scores 0.25 or more goes to the model and effort it picks in one tool-free call (Sonnet capped at medium effort unless you pin `runner.effort.sonnet`). Plan: the notice now names the planner's model and effort. Review: Haiku normally, Sonnet at low effort for a step rated as hard as Opus work.
 
