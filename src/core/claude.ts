@@ -356,7 +356,7 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
  * (spawn until Claude Code reports it is ready), how long until the first text, and the total. It shows whether a slow
  * call is Claude Code's own start-up (plugins, hooks, MCP servers) or the model.
  */
-function debugTiming(o: RunClaudeOptions): { mark: (kind: string) => void; done: (code: number | null) => void } | null {
+export function debugTiming(o: RunClaudeOptions, keptAlive = false): { mark: (kind: string) => void; done: (code: number | null) => void } | null {
   if (!process.env.SMART_DEBUG) return null;
   const t0 = Date.now();
   const at: Record<string, number> = {};
@@ -367,7 +367,7 @@ function debugTiming(o: RunClaudeOptions): { mark: (kind: string) => void; done:
     done: (code) => {
       const line = {
         time: new Date().toISOString(), model: o.model, tools: o.tools ? (o.tools.length ? 'some' : 'none') : 'all', lean: Boolean(o.lean), effort: o.effort ?? null,
-        session: o.session ? (o.session.resume ? 'resume' : 'new') : 'none', exit: code,
+        session: `${keptAlive ? 'keep-alive ' : ''}${o.session ? (o.session.resume ? 'resume' : 'new') : 'none'}`, exit: code,
         ms: { startupUntilReady: at.init ?? null, firstText: at.text ?? null, firstTool: at.tool ?? null, result: at.result ?? null, total: Date.now() - t0 },
       };
       try {
@@ -381,7 +381,7 @@ function debugTiming(o: RunClaudeOptions): { mark: (kind: string) => void; done:
   };
 }
 
-function toSpawnError(e: unknown): SmartError {
+export function toSpawnError(e: unknown): SmartError {
   return (e as NodeJS.ErrnoException)?.code === 'ENOENT'
     ? cliMissing()
     : new SmartError('claude', `Could not start Claude Code: ${(e as Error).message}`);
@@ -397,7 +397,7 @@ export interface ClaudeCommand {
 
 let resolved: { key: string; command: ClaudeCommand } | undefined;
 /** `resolveClaudeCommand`, remembered while PATH is unchanged: on Windows it probes every PATH directory, and a task makes many calls. */
-function claudeCommand(): ClaudeCommand {
+export function claudeCommand(): ClaudeCommand {
   const key = `${process.env.SMART_CLAUDE_BIN ?? ''}\0${process.env.PATH ?? process.env.Path ?? ''}`;
   if (resolved?.key !== key) resolved = { key, command: resolveClaudeCommand() };
   return resolved.command;

@@ -84,6 +84,8 @@ const ConfigSchema = z.object({
       bare: z.boolean().default(false),
       /** Classify, plan and review calls have no tools, so they skip hooks, plugins and MCP servers (faster start-up). */
       leanCalls: z.boolean().default(true),
+      /** Keep one `claude` process running per conversation for coding steps, so a step does not wait for Claude Code to start. */
+      keepAlive: z.boolean().default(true),
       /** Pick the thinking effort per step from the task (cheap for easy work, more for hard). An explicit `effort` below wins. */
       autoEffort: z.boolean().default(true),
       extraArgs: z.array(z.string()).default([]),

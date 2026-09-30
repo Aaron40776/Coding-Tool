@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Kept-alive coding process** (`runner.keepAlive`, on by default): coding steps and follow-up tasks of a conversation go to one running `claude` process (`--input-format stream-json`) instead of starting Claude Code for every step. Measured: a follow-up message took 1.4 s against 3.1 s, at the same cost. The model is switched on the running process; another effort or permission mode gets a fresh one; a process that cannot be kept alive falls back to one `claude` per call; cancelling ends it; idle ones end after 10 minutes. Claude Code reports usage as running totals per process, so each message's own usage and cost are the difference.
+- Refactor: `src/core/pipeline.ts` is split into `src/core/pipeline/` modules (calls, changes, limits, session, steps); behaviour unchanged.
+
 - **Cost estimate before you approve a plan**: the review header shows `≈ $0.42 if every step passes first time`, from the median cost of your own recent clean steps on each model and effort (a rough guess, marked as such, until you have a few). `--dry-run` prints it too.
 - **Plan review follows your edits**: badges, routing reasons and the estimate are recomputed after every change (a model you pick with `m`, rewritten instructions, a step you add). Text editing has a real cursor: `←` `→` `Home` `End`, `Ctrl+W`, `Ctrl+U`.
 - **`/good` and `/bad`** rate the last result. A `/bad` result counts as a miss for its model and effort in the learning, so similar work leans to a stronger model or more effort.
