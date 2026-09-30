@@ -13,6 +13,7 @@ export type Command =
   | { kind: 'config' }
   | { kind: 'diff' }
   | { kind: 'resume' }
+  | { kind: 'feedback'; value: 'good' | 'bad' }
   | { kind: 'mode'; mode: string | null | 'show' }
   | { kind: 'model'; tier: ModelTier | null }
   | { kind: 'error'; message: string }
@@ -53,6 +54,10 @@ export function parseInput(raw: string): Command | null {
     case 'resume':
     case 'continue':
       return { kind: 'resume' };
+    case 'good':
+      return { kind: 'feedback', value: 'good' };
+    case 'bad':
+      return { kind: 'feedback', value: 'bad' };
     case 'mode': {
       const arg = (rest[0] ?? '').toLowerCase();
       if (arg === '') return { kind: 'mode', mode: 'show' };
@@ -86,6 +91,8 @@ export const COMMANDS: { name: string; help: string }[] = [
   { name: '/undo', help: 'revert the last task\'s file changes' },
   { name: '/diff', help: 'show the last task\'s changes' },
   { name: '/resume', help: 'continue a failed or cancelled task' },
+  { name: '/good', help: 'the last result was right' },
+  { name: '/bad', help: 'the last result was wrong (smart learns)' },
   { name: '/mode', help: 'bypass | edits | plan | auto' },
   { name: '/help', help: 'show help' },
   { name: '/quit', help: 'exit' },
@@ -108,6 +115,7 @@ export const HELP_TEXT = [
   '  /undo             revert the file changes of the last task (needs git)',
   '  /diff             show what the last task changed',
   '  /resume           continue a failed or cancelled task from its first unfinished step',
+  '  /good, /bad       rate the last result; /bad makes smart use a stronger model for similar work',
   '  /mode <m>         permissions: bypass | edits | plan (read-only) | auto',
   '  /help, /quit',
   'While a task runs, Enter queues the next task (Esc cancels both); /usage, /cost and /diff work meanwhile.',

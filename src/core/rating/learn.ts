@@ -38,7 +38,8 @@ export function buildHistory(tasks: TaskRecord[], nowMs = Date.now()): History {
       const key = statsKey(s.rated.tier, s.rated.effort, s.rated.score);
       const cur = h.get(key) ?? { n: 0, ok: 0 };
       cur.n += 1;
-      cur.ok += s.outcome === 'done' && s.attempts === 1 ? 1 : 0;
+      // You said the result was wrong (/bad): it counts as a miss for its rung even though its checks passed.
+      cur.ok += s.outcome === 'done' && s.attempts === 1 && t.feedback !== 'bad' ? 1 : 0;
       h.set(key, cur);
     }
   }

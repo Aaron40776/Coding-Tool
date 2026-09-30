@@ -7,7 +7,7 @@ import { costLines, summarize } from '../core/stats.js';
 import type { Tracker } from '../core/store/tracker.js';
 import { usageLines } from '../core/usage.js';
 import type { ModelTier } from '../core/types.js';
-import { projectFiles } from '../core/files.js';
+import { foldersOf, projectFiles } from '../core/files.js';
 import type { InputHistory } from '../core/store/inputHistory.js';
 import { COMMANDS, HELP_TEXT, matchCommands, modeLabel, parseInput } from './commands.js';
 import { CostMeter } from './components/CostMeter.js';
@@ -83,7 +83,12 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
   const maxScroll = useRef(0);
   const [draft, setDraft] = useState('');
   const [history] = useState(() => inputHistory?.load() ?? []);
-  const [files, setFiles] = useState(() => projectFiles(cwd, 400));
+  // Files and the folders that hold them: `@src/` attaches a folder's file list.
+  const listFiles = () => {
+    const f = projectFiles(cwd, 400);
+    return [...f, ...foldersOf(f)];
+  };
+  const [files, setFiles] = useState(listFiles);
   /** A task typed while another one runs: it starts when that one completes. */
   const [queued, setQueued] = useState<string | null>(null);
   const stateRef = useRef(state);
@@ -140,7 +145,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
   // When a task ends: pick up files it created for @ completion, and start the queued task if it completed.
   useEffect(() => {
     if (state.phase !== 'finished') return;
-    setFiles(projectFiles(cwd, 400));
+    setFiles(listFiles());
     if (!queued || pipeline.isRunning) return;
     setQueued(null);
     if (state.ok) startTask(queued);
@@ -238,6 +243,9 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
       case 'diff':
         void pipeline.diff();
         return;
+      case 'feedback':
+        if (pipeline.isRunning) return dispatch({ type: 'notice', level: 'warn', message: 'Rate a task once it has finished.' });
+        return pipeline.rateLast(cmd.value);
       case 'resume':
         if (pipeline.isRunning) return dispatch({ type: 'notice', level: 'warn', message: 'A task is already running.' });
         return startResume();
@@ -303,7 +311,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
         <PipelineBar stages={state.stages} compact={size.cols < 70} />
       </Box>
       {state.phase === 'approval' && state.plan ? (
-        <PlanApproval plan={state.plan} routes={state.routes} onApprove={(p) => pipeline.approvePlan(p)} onCancel={() => pipeline.cancel()} height={mainHeight} width={size.cols} />
+        <PlanApproval plan={state.plan} routes={state.routes} preview={(p, st) => pipeline.previewStep(p, st)} onApprove={(p) => pipeline.approvePlan(p)} onCancel={() => pipeline.cancel()} height={mainHeight} width={size.cols} />
       ) : view === 'stats' && statsSummary ? (
         <StatsView summary={statsSummary} limits={state.limits} path={trackerPath} height={mainHeight} width={size.cols} />
       ) : (

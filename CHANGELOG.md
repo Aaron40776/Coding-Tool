@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Cost estimate before you approve a plan**: the review header shows `≈ $0.42 if every step passes first time`, from the median cost of your own recent clean steps on each model and effort (a rough guess, marked as such, until you have a few). `--dry-run` prints it too.
+- **Plan review follows your edits**: badges, routing reasons and the estimate are recomputed after every change (a model you pick with `m`, rewritten instructions, a step you add). Text editing has a real cursor: `←` `→` `Home` `End`, `Ctrl+W`, `Ctrl+U`.
+- **`/good` and `/bad`** rate the last result. A `/bad` result counts as a miss for its model and effort in the learning, so similar work leans to a stronger model or more effort.
+- **`@folder/`** attaches the folder's file list (git's view, up to 150 files) so the model knows what is there; folders appear in `@` completion. A folder outside the project is ignored.
+
 - **Live replies**: coding steps and longer answers stream word by word (`--include-partial-messages`) instead of appearing block by block. The output panel caches the wrapping of every line, so streaming re-wraps only the line that grows.
 - **Overloaded servers**: an "overloaded" or temporary server error from Anthropic's API makes `smart` wait (15 s, then 45 s) and retry the same call, instead of counting a failed step and escalating to a bigger model. Still overloaded: the task stops and stays resumable.
 - **Hard budget cap**: every coding call gets what is left of the task budget as its own `--max-budget-usd`, so `--budget` can no longer be overshot by one long step.

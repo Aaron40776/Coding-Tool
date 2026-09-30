@@ -1,5 +1,6 @@
 import type { EventBus, SmartEvent } from './core/events.js';
 import type { Pipeline } from './core/pipeline.js';
+import { formatEstimate } from './core/rating/estimate.js';
 import type { Plan, RouteDecision, Usage } from './core/types.js';
 
 export interface PrintOptions {
@@ -161,6 +162,10 @@ export async function runPrint(pipeline: Pipeline, bus: EventBus, prompt: string
     // Dry run: the plan and the model chosen for each step (and why) is the output.
     io.out.write(`${classification ?? ''}\n`);
     for (const s of steps.values()) io.out.write(`- ${s.title} [${s.model}] ${s.reason ?? ''}\n`);
+    if (plan && plan.steps.length > 0) {
+      const parts = plan.steps.filter((st) => !st.skipped).map((st) => pipeline.previewStep(plan!, st).estimate);
+      io.out.write(`Estimated cost: ${formatEstimate(parts)} if every step passes first time\n`);
+    }
   } else if (reply) {
     io.out.write(reply.endsWith('\n') ? reply : `${reply}\n`);
   }

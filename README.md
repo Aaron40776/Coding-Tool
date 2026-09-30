@@ -37,7 +37,7 @@ smart update                       # get the latest version (git pull, install, 
 smart init                         # write a starter smart.config.json (--global: %USERPROFILE%\.smart, for all projects)
 ```
 
-In the app: `Enter` sends, `Esc` cancels, `Tab` switches panel, `@path` adds a file (Tab completes), `\`+`Enter` starts a new line, `↑` recalls earlier prompts.
+In the app: `Enter` sends, `Esc` cancels, `Tab` switches panel, `@path` adds a file and `@folder/` its file list (Tab completes), `\`+`Enter` starts a new line, `↑` recalls earlier prompts.
 Replies appear as they are written. In Windows Terminal the tab and taskbar button show progress: steps done, yellow while a plan waits for you, red if a task failed.
 While a task runs you can type the next one: `Enter` queues it and it starts when the current task completes (`/usage`, `/cost`, `/diff` work meanwhile).
 
@@ -45,11 +45,13 @@ While a task runs you can type the next one: `Enter` queues it and it starts whe
 | --- | --- |
 | `/stats` `/usage` `/cost` | spend history, your 5-hour / 7-day account limits, this session's cost |
 | `/model haiku\|sonnet\|opus\|auto` | force a model; `/dry` toggles dry-run |
+| `/good` `/bad` | rate the last result; `/bad` teaches smart to use a stronger model or more effort for similar work |
 | `/undo` `/diff` `/resume` | revert or show the last task's file changes (needs git; also after a restart), continue an unfinished task |
 | `/mode bypass\|edits\|plan\|auto` | permission mode (`plan` is read-only) |
 | `/new` `/config` `/help` `/quit` | fresh conversation, effective settings, help, exit |
 
-**Plan review** (big builds): `↑↓` select, `Space` skip, `a` add, `d` delete, `J`/`K` move, `m` model, `e`/`i` edit title/instructions, `Enter` run, `Esc` cancel.
+**Plan review** (big builds): `↑↓` select, `Space` skip, `a` add, `d` delete, `J`/`K` move, `m` model, `e`/`i` edit title/instructions (`←→` `Home` `End` `Ctrl+W` while editing), `Enter` run, `Esc` cancel.
+The header shows what the plan will likely cost, from what your own steps on each model and effort have cost; model badges and the estimate update as you edit.
 
 ## How it saves usage
 

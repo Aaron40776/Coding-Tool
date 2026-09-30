@@ -38,6 +38,10 @@ When they disagree the score leans towards the higher one (a retry and lost time
 The per-complexity settings (`routing.trivial`, `small_edit`, `multi_file`, `large_build`) are **floors**: the rater can go up from them, never below. `routing.optimize` shifts the boundaries: `cost` needs stronger evidence before a bigger rung, `quality` less (by 0.06).
 
 **It learns from your history.** Each step records the rung it was rated at and whether it passed first time. If a rung passed first time in under about 72% of your last-30-days steps in the same score band (after at least 6), the next similar step goes one rung up; after 15 near-perfect steps, one effort level down on the same model. The reason says so (`history: sonnet · medium passed first try in only 4 of 9 similar steps`). No model is called for any of this.
+`/bad` after a task tells it the result was wrong even though its checks passed: its steps then count as misses for their rungs, so similar work leans to a stronger model or more effort. `/good` confirms a result.
+
+**Cost estimate.** The plan review shows what the plan will likely cost if every step passes first time: per step, the median cost of your own recent
+clean steps on the same model and effort (at least 3; last 60 days), or a rough built-in guess until you have them (marked "rough"). `--dry-run` prints it too.
 
 **How good is it?** On 30 prompts I labelled while tuning it, 30 land in the expected range; on 20 written beforehand and not tuned on, 18 do (both are in `test/fixtures` and run in the tests). The labels are one person's judgement and the prompts are short, so treat that as a regression net, not proof: run `smart --rate` on your own tasks and adjust `optimize`, the floors and `keywordRules`.
 
