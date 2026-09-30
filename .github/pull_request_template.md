@@ -8,4 +8,4 @@
 <!-- How was it verified? `npm run check` must pass. Note any real-CLI (`claude`) runs. -->
 
 ## Notes
-<!-- Risks, follow-ups, Windows/macOS/Linux differences, config changes. -->
+<!-- Risks, follow-ups, Windows 10/11 notes, config changes. -->

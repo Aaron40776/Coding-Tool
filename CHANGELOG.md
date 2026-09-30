@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Windows 10/11 only**: CI runs on Windows (Node 22 and 24) and the docs are written for PowerShell. The README's install commands no longer use `&&`, which Windows PowerShell 5.1 (the default on Windows 10/11) rejects.
+
 - **Cheaper long conversations**: once the Claude Code session has grown past `session.maxContextTokens` (default 80k tokens), the next task starts a fresh session with the conversation summary. Every turn of every step re-reads the whole session, so long chats used to make each step dearer. The size is measured from Claude's own usage report.
 - **Faster plans**: steps before the last run the quick checks (typecheck, lint, build); the test suite runs after the last step, where anything an earlier step broke is still caught and fixed. `verify.testEveryStep: true` restores tests after every step; your own `verify.commands` always all run.
 - **Config**: your global `~/.smart/smart.config.json` and a project's `smart.config.json` are merged (the project wins key by key). A project file used to hide your global settings completely. `smart init` now writes a small starter with notes instead of every default (which pinned them all, so improvements to the defaults never reached you); `smart init --global` writes your global one. `"//"` keys are allowed as comments.

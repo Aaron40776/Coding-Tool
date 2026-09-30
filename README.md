@@ -10,21 +10,22 @@ with the same follow-up context, and shows what everything costs.
 
 ## Install
 
-Needs Node.js 22+ and the [Claude Code CLI](https://docs.claude.com/claude-code) on your `PATH`, logged in (run `claude` once).
+For **Windows 10 and 11**. Needs Node.js 22+ and the [Claude Code CLI](https://docs.claude.com/claude-code) on your `PATH`, logged in (run `claude` once). In PowerShell:
 
-```sh
+```powershell
 git clone https://github.com/Aaron40776/Smart.git
 cd Smart
-npm install && npm run build
+npm install
+npm run build
 npm link            # puts `smart` on your PATH
 ```
 
-Update with `git pull && npm install && npm run build`. On Windows PowerShell, if scripts are blocked run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once.
-If `claude` is not found, set `SMART_CLAUDE_BIN` to its full path.
+Update: `git pull`, then `npm install` and `npm run build` in the `Smart` folder. If scripts are blocked, run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once.
+If `claude` is not found, set its full path: `$env:SMART_CLAUDE_BIN = "C:\path\to\claude.exe"`.
 
 ## Use
 
-```sh
+```powershell
 smart                              # interactive
 smart "make me a snake game"       # one-shot: same UI, exits when done
 smart -c                           # continue the last conversation in this directory (--continue)
@@ -34,7 +35,7 @@ smart --model haiku "fix the typo" # force a tier      (--no-plan skips planning
 smart -p "fix the typo" | cat      # headless (--print): reply on stdout, progress on stderr (--output-format json for scripts, --verbose for tool calls)
 smart --rate "fix the race in worker.js"  # show which model and effort it would pick, and why (calls no model)
 smart --no-review "..."            # skip the acceptance review     (--config ./my.json uses another config file)
-smart init                         # write a starter smart.config.json (--global: ~/.smart/, for all projects)
+smart init                         # write a starter smart.config.json (--global: %USERPROFILE%\.smart, for all projects)
 ```
 
 In the app: `Enter` sends, `Esc` cancels, `Tab` switches panel, `@path` adds a file (Tab completes), `\`+`Enter` starts a new line, `↑` recalls earlier prompts.
@@ -68,13 +69,13 @@ A `smart.config.json` that comes with a repo can run commands (`verify.commands`
 
 ## Development
 
-```sh
+```powershell
 npm install
 npm run check      # lint + typecheck + tests + build
 npm run dev        # run from source
 ```
 
-Layout and rules: [CONTRIBUTING.md](CONTRIBUTING.md). History: [CHANGELOG.md](CHANGELOG.md). `SMART_DEBUG=1` logs per-call timings to `~/.smart/debug.log`; `SMART_E2E=1 npm test -- test/e2e` runs one real Haiku task.
+Layout and rules: [CONTRIBUTING.md](CONTRIBUTING.md). History: [CHANGELOG.md](CHANGELOG.md). `$env:SMART_DEBUG=1` logs per-call timings to `%USERPROFILE%\.smart\debug.log`; `$env:SMART_E2E=1; npm test -- test/e2e` runs one real Haiku task.
 
 ## License
 
