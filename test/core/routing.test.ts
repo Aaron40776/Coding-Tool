@@ -8,7 +8,7 @@ import { ConversationStore } from '../../src/core/store/conversation.js';
 import { EventBus, type SmartEvent } from '../../src/core/events.js';
 import { SmartError } from '../../src/core/errors.js';
 import { parseClassification } from '../../src/core/classifier.js';
-import { route } from '../../src/core/router.js';
+import { plannerTier, route, routeRole } from '../../src/core/router.js';
 import type { Checkpointer } from '../../src/core/checkpoint.js';
 import { Pipeline } from '../../src/core/pipeline.js';
 import { emptyUsage, type Complexity } from '../../src/core/types.js';
@@ -287,6 +287,70 @@ describe('spend of failed calls', () => {
     expect(res.ok).toBe(false);
     expect(res.totals.costUsd).toBeGreaterThanOrEqual(0.75);
     expect(res.totals.outputTokens).toBeGreaterThanOrEqual(900);
+  });
+});
+
+describe('who plans', () => {
+  it('Opus plans big builds and hard tasks; Sonnet plans mid-size ones', () => {
+    const c = defaultConfig();
+    expect(plannerTier({ complexity: 'large_build' }, c)).toBe('opus');
+    expect(plannerTier({ complexity: 'multi_file', difficulty: 'hard' }, c)).toBe('opus');
+    expect(plannerTier({ complexity: 'multi_file' }, c)).toBe('sonnet');
+    expect(plannerTier({ complexity: 'small_edit', difficulty: 'easy' }, c)).toBe('sonnet');
+    expect(plannerTier(undefined, c)).toBe('opus'); // no information: play safe
+    expect(routeRole('planner', c, 'haiku').tier).toBe('haiku'); // a forced model wins
+  });
+
+  it('follows the config', () => {
+    const c = defaultConfig();
+    c.routing.plannerLight = 'haiku';
+    c.routing.planner = 'sonnet';
+    expect(plannerTier({ complexity: 'multi_file' }, c)).toBe('haiku');
+    expect(plannerTier({ complexity: 'large_build' }, c)).toBe('sonnet');
+  });
+
+  it('the planner call uses the model for the task size', async () => {
+    const big = setup({ complexities: ['large_build'] });
+    await big.pipeline.runTask('build an app', { autoApprove: true });
+    expect(big.calls.find((c) => c.role === 'planner')?.model).toBe('opus');
+    const mid = setup({ complexities: ['multi_file'], classifier: { needsPlan: true } });
+    await mid.pipeline.runTask('add login and signup and tests', { autoApprove: true });
+    expect(mid.calls.find((c) => c.role === 'planner')?.model).toBe('sonnet');
+  });
+});
+
+describe('docs-only changes are not checked', () => {
+  it('isDocsOnly: prose and images yes; code, config and empty lists no', async () => {
+    const { isDocsOnly } = await import('../../src/core/verifier.js');
+    expect(isDocsOnly(['README.md', 'docs/guide.mdx', 'notes.txt', 'img/logo.png'])).toBe(true);
+    expect(isDocsOnly(['LICENSE', 'CHANGELOG'])).toBe(true);
+    expect(isDocsOnly(['README.md', 'src/a.ts'])).toBe(false);
+    expect(isDocsOnly(['package.json'])).toBe(false);
+    expect(isDocsOnly(['tsconfig.json', 'ci.yml'])).toBe(false);
+    expect(isDocsOnly([])).toBe(false);
+  });
+
+  it('a step that only edits the README does not run the project checks, a code edit does', async () => {
+    const ran: string[] = [];
+    const ok = { isError: false, subtype: 'success', text: 'ok', usage: emptyUsage(), sessionId: 's', numTurns: 1 };
+    const mk = (file: string) => {
+      const config = defaultConfig();
+      config.review.enabled = false;
+      config.verify.commands = ['npm run lint'];
+      const run: RunClaudeFn = async (o) => {
+        const props = (o.jsonSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+        if (props && 'complexity' in props) return { ...ok, structured: { complexity: 'small_edit', needsPlan: false, reason: 'r' } };
+        o.onEvent?.({ kind: 'tool', name: 'Write', summary: `Write ${file}`, writtenFile: join(t.cwd, file) });
+        return { ...ok, structured: undefined };
+      };
+      const exec = async (cmd: string) => { ran.push(cmd); return { code: 0, output: '' }; };
+      const t = { cwd: mkdtempSync(join(tmpdir(), 'smart-docs-')) };
+      return new Pipeline(config, new EventBus(), t.cwd, { run, exec: exec as never, uid: 1000, listFiles: () => [] });
+    };
+    await mk('README.md').runTask('update the readme');
+    expect(ran).toEqual([]);
+    await mk('src/app.ts').runTask('change the app');
+    expect(ran).toEqual(['npm run lint']);
   });
 });
 

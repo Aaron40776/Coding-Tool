@@ -14,14 +14,14 @@ import { describeConfig } from './describe.js';
 import { pickEffort, planEffort } from './effort.js';
 import { CHAT_SYSTEM, isSmallTalk } from './smalltalk.js';
 import { makePlan, singleStepPlan } from './planner.js';
-import { applyWarmCache, route } from './router.js';
+import { applyWarmCache, plannerTier, route } from './router.js';
 import { reviewStep } from './review.js';
 import { gatherFiles, runStep } from './runner.js';
 import type { StepOutcome, StepRecord, TaskRecord, Tracker } from './store/tracker.js';
 import { addUsage, emptyUsage, type Classification, type Limits, type ModelTier, type Plan, type PlanStep, type RouteDecision, type Usage } from './types.js';
 import { LimitsStore } from './store/limits.js';
 import { applyLimitPressure, fmtReset, pct, windowLabel } from './usage.js';
-import { detectChecks, nextAttempt, runChecks, type ExecFn } from './verifier.js';
+import { detectChecks, isDocsOnly, nextAttempt, runChecks, type ExecFn } from './verifier.js';
 
 export interface PipelineDeps {
   run: RunClaudeFn;
@@ -301,7 +301,7 @@ export class Pipeline {
         if (wantPlan) {
           at('plan');
           const p = await makePlan(prompt, classification, {
-            config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(), memory, effort: planEffort(classification.complexity, this.config),
+            config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(classification), memory, effort: planEffort(classification.complexity, this.config),
             projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd), referenced,
           });
           this.addCallUsage(p.usage);
@@ -470,13 +470,10 @@ export class Pipeline {
   }
 
   /** While an account usage window is nearly used up, plan with sonnet instead of the (heavier) configured planner model. */
-  private plannerDownshift(): ModelTier | null {
-    const probe = applyLimitPressure(
-      { tier: this.config.routing.planner, model: this.config.models[this.config.routing.planner], reason: 'planner', source: 'complexity' },
-      this.limits,
-      this.config,
-    );
-    return probe.tier !== this.config.routing.planner ? probe.tier : null;
+  private plannerDownshift(classification: Classification): ModelTier | null {
+    const tier = plannerTier(classification, this.config);
+    const probe = applyLimitPressure({ tier, model: this.config.models[tier], reason: 'planner', source: 'complexity' }, this.limits, this.config);
+    return probe.tier !== tier ? probe.tier : null;
   }
 
   private observeLimits(windows: Limits['windows'], status?: string): void {
@@ -704,7 +701,8 @@ export class Pipeline {
         this.conv.lastCallAtByTier = { ...this.conv.lastCallAtByTier, [tier]: this.conv.lastCallAt };
 
         // verify
-        const skipVerify = classification.complexity === 'trivial' && stepFiles.length === 0;
+        // Nothing to check when no file changed for a question, or when only prose and images changed.
+        const skipVerify = (classification.complexity === 'trivial' && stepFiles.length === 0) || isDocsOnly(stepFiles);
         const checks = skipVerify ? [] : detectChecks(this.cwd, this.config);
         if (checks.length > 0) a.current('verify');
         const v = await runChecks(checks, {

@@ -45,10 +45,17 @@ export function route(
   return decision(tier, config, `${classification.complexity} → ${tier}`, 'complexity');
 }
 
-/** Route for the fixed roles that are not driven by task complexity. */
-export function routeRole(role: 'planner' | 'classifier' | 'reviewer', config: SmartConfig, override?: ModelTier | null): RouteDecision {
-  const tier = config.routing[role];
-  return override && role === 'planner' ? decision(override, config, `forced to ${override}`) : decision(tier, config, `${role} role → ${tier}`);
+/** Which planner a task gets: the strong one for big builds and hard tasks, the light one for the rest. */
+export function plannerTier(classification: Pick<Classification, 'complexity' | 'difficulty'> | undefined, config: SmartConfig): ModelTier {
+  const heavy = !classification || classification.complexity === 'large_build' || classification.difficulty === 'hard';
+  return heavy ? config.routing.planner : config.routing.plannerLight;
+}
+
+/** Route for the fixed roles that are not driven by task complexity (the planner also looks at how big and hard the task is). */
+export function routeRole(role: 'planner' | 'classifier' | 'reviewer', config: SmartConfig, override?: ModelTier | null, classification?: Classification): RouteDecision {
+  if (override && role === 'planner') return decision(override, config, `forced to ${override}`);
+  const tier = role === 'planner' ? plannerTier(classification, config) : config.routing[role];
+  return decision(tier, config, `${role} role → ${tier}`);
 }
 
 /** Next tier up the escalation ladder, or null when already at the top (or not on the ladder). */

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Cheaper planning: mid-size multi-part tasks are now planned by Sonnet (`routing.plannerLight`, about 2x faster and 5x cheaper on a live comparison), Opus only plans big builds and `hard` tasks. Plans are steered towards fewer, larger steps (`limits.maxPlanSteps` default 8 to 6). A change that only touches prose or images skips the project checks.
+- Docs can no longer drift from the code: tests compare `smart.config.example.json` (and so `smart init`), the README, ROUTING.md, CONTRIBUTING.md, `/help` and the command-line flags with the real settings, commands and files. The example config was missing `routing.reviewer`, `review` and the three file paths; the README was missing `--config`, `--continue`, `--print`, `--verbose` and `--no-review`.
+
 - Tidy: README cut from 183 to about 80 lines (details live in ROUTING.md, which now also covers effort, faster start-up and undo); `PLAN.md` (the original build plan, long out of date) removed; file-backed stores grouped in `src/core/store/` with one shared atomic-write helper instead of four copies; `/config` also shows effort and lean-call settings.
 - Speed: a greeting ("hey", "thanks") is answered by one short tool-less Haiku call instead of classify + a full Claude Code session (about 8 s down to 3 s here, and far more where plugins, hooks or MCP servers slow every `claude` start-up). Classify, plan and review calls also start `claude` lean (no hooks, plugins, MCP servers or skills; `runner.leanCalls`, on by default, with an automatic fallback if that breaks login).
 - Routing: the classifier also rates difficulty and answers pure questions itself (one Haiku call in total, no coding session); a `hard` single task goes straight to Opus (steps of a written plan stay on Sonnet). The git snapshot now runs while the classifier and planner work instead of before them.

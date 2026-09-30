@@ -38,6 +38,20 @@ const isPlaceholderTest = (cmd: string): boolean => /no test specified/i.test(cm
 /** Ordered cheapest-first so a type or lint error fails fast before the slow build/tests. */
 const SCRIPT_ORDER = ['typecheck', 'lint', 'build', 'test'] as const;
 
+const DOCS_ONLY = /\.(md|mdx|markdown|txt|rst|adoc|png|jpe?g|gif|svg|webp|ico|pdf)$/i;
+const DOC_NAMES = /^(readme|license|licence|changelog|contributing|notice|authors|code_of_conduct)(\.[a-z]+)?$/i;
+
+/**
+ * True when every changed file is prose or an image, so there is nothing for a typecheck, lint, build or test to break.
+ * Config and data files (json, yaml, toml) are deliberately not here: they can break a build.
+ */
+export function isDocsOnly(files: string[]): boolean {
+  return files.length > 0 && files.every((f) => {
+    const name = f.split(/[\\/]/).pop() ?? f;
+    return DOCS_ONLY.test(name) || DOC_NAMES.test(name);
+  });
+}
+
 export function detectChecks(cwd: string, config: SmartConfig): Check[] {
   const { auto, commands } = config.verify;
   if (commands.length > 0) return commands.map((command) => ({ name: command, command }));

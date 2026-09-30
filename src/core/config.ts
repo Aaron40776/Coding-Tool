@@ -27,7 +27,10 @@ const ConfigSchema = z.object({
       small_edit: tier.default('sonnet'),
       multi_file: tier.default('sonnet'),
       large_build: tier.default('sonnet'),
+      /** Plans big builds and hard tasks. */
       planner: tier.default('opus'),
+      /** Plans everything else that needs a plan (mid-size, multi-part changes): Sonnet is plenty and about 5x cheaper. */
+      plannerLight: tier.default('sonnet'),
       classifier: tier.default('haiku'),
       reviewer: tier.default('haiku'),
       keywordRules: z.array(z.object({ match: z.string().min(1).refine(validRegex, 'invalid regular expression'), tier })).default([
@@ -43,7 +46,7 @@ const ConfigSchema = z.object({
     .prefault({}),
   limits: z
     .object({
-      maxPlanSteps: z.number().int().min(1).max(30).default(8),
+      maxPlanSteps: z.number().int().min(1).max(30).default(6),
       maxContextBytes: z.number().int().min(0).default(40_000),
       maxBudgetUsdPerStep: z.number().positive().nullable().default(null),
       /** Stop the task once its total cost reaches this many dollars. */

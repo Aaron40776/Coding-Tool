@@ -9,7 +9,7 @@ import { emptyUsage } from './types.js';
 
 export const PLANNER_SYSTEM = `You turn a coding request into a compact, ordered build plan that a cheaper model executes one step at a time. Every word costs tokens.
 Scope: deliver what was asked with sensible basics. Do not add extras the user did not request (no bonus features, docs, or tooling beyond what is needed to run and test it).
-Steps: as few as possible (usually 3-5). Each is independently verifiable and leaves the project working. Group related work; do not split trivially.
+Steps: as few as possible (usually 2-4). Every step is a full extra model call with its own start-up cost, so merge steps that touch the same files or are too small to stand alone. Each step is independently verifiable and leaves the project working.
 summary: one sentence. features: short phrases. fileStructure: paths to create or change.
 steps[].instructions: under 60 words. Say what to build and where, and key decisions; never write the code. The executor sees only that step.
 steps[].files: existing files it must read or edit. steps[].acceptance: 1-2 short, checkable criteria.
@@ -124,7 +124,7 @@ export interface PlanOutcome {
  */
 export async function makePlan(prompt: string, classification: Classification, ctx: PlanContext): Promise<PlanOutcome> {
   const { maxPlanSteps } = ctx.config.limits;
-  const role = routeRole('planner', ctx.config, ctx.override);
+  const role = routeRole('planner', ctx.config, ctx.override, classification);
   const files = ctx.projectFiles?.length ? `\n<existing_files>\n${ctx.projectFiles.join('\n')}\n</existing_files>` : '\n(The project directory is empty or new.)';
   try {
     const result = await ctx.run({
