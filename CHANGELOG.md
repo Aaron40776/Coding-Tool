@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-09-30)
 
 - **Kept-alive coding process** (`runner.keepAlive`, on by default): coding steps and follow-up tasks of a conversation go to one running `claude` process (`--input-format stream-json`) instead of starting Claude Code for every step. Measured: a follow-up message took 1.4 s against 3.1 s, at the same cost. The model is switched on the running process; another effort or permission mode gets a fresh one; a process that cannot be kept alive falls back to one `claude` per call; cancelling ends it; idle ones end after 10 minutes. Claude Code reports usage as running totals per process, so each message's own usage and cost are the difference.
 - Refactor: `src/core/pipeline.ts` is split into `src/core/pipeline/` modules (calls, changes, limits, session, steps); behaviour unchanged.
@@ -14,8 +14,6 @@
 - **Overloaded servers**: an "overloaded" or temporary server error from Anthropic's API makes `smart` wait (15 s, then 45 s) and retry the same call, instead of counting a failed step and escalating to a bigger model. Still overloaded: the task stops and stays resumable.
 - **Hard budget cap**: every coding call gets what is left of the task budget as its own `--max-budget-usd`, so `--budget` can no longer be overshot by one long step.
 - **Faster snapshots**: Git's untracked-file cache is used for the `/undo` snapshots, and the end-of-task snapshot is skipped when nothing ran after the last step's. A snapshot slower than 4 s is pointed out once with the fix (`git config core.fsmonitor true`).
-
-## 0.3.0 (2026-09-30)
 
 - **Install and update in one command**: `irm https://raw.githubusercontent.com/Aaron40776/Smart/main/install.ps1 | iex` checks Git, Node.js 22+ and Claude Code, then clones, builds and links smart; `smart update` pulls, installs and rebuilds. CI parses the installer with Windows PowerShell 5.1 and runs it.
 - **Progress on the taskbar**: in Windows Terminal the tab and taskbar button show how far a task is, turn yellow while a plan waits for your approval and red when a task failed.
