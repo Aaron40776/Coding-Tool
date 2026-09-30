@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // A stand-in for `claude -p --input-format stream-json`: one message per stdin line, running-total usage and cost like the real CLI.
-// Env: FAKE_DIE=1 exit at once (an unusable process), FAKE_ERROR_TURN=n make message n an error result, FAKE_SLOW_MS delay per message.
+// Env: FAKE_DIE=1 exit at once (an unusable process), FAKE_SILENT=1 never answer (an old CLI waiting for stdin to close),
+//      FAKE_CONTROL=refuse|ignore refuse or ignore a model switch, FAKE_ERROR_TURN=n make message n an error result, FAKE_SLOW_MS delay per message.
 import { createInterface } from 'node:readline';
 
 const args = process.argv.slice(2);
 const flag = (n) => { const i = args.indexOf(n); return i === -1 ? undefined : args[i + 1]; };
 if (process.env.FAKE_DIE) process.exit(3);
+if (process.env.FAKE_SILENT) { process.stdin.resume(); await new Promise(() => undefined); }
 let model = flag('--model') ?? 'sonnet';
 const sessionId = flag('--session-id') ?? flag('--resume') ?? 'fake';
 const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
@@ -15,6 +17,11 @@ const rl = createInterface({ input: process.stdin });
 rl.on('line', async (line) => {
   const d = JSON.parse(line);
   if (d.type === 'control_request') {
+    if (process.env.FAKE_CONTROL === 'ignore') return;
+    if (process.env.FAKE_CONTROL === 'refuse') {
+      out({ type: 'control_response', response: { subtype: 'error', request_id: d.request_id, error: 'unknown model' } });
+      return;
+    }
     if (d.request.subtype === 'set_model') model = d.request.model;
     out({ type: 'control_response', response: { subtype: 'success', request_id: d.request_id } });
     return;

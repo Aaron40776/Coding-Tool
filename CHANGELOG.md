@@ -2,6 +2,10 @@
 
 ## 0.3.0 (2026-09-30)
 
+- Fix: a kept-alive `claude` process that never answers (an older Claude Code that ignores `--input-format stream-json`) no longer hangs the step: after 30 s without any output it is given up and the call runs the classic way, which is safe because nothing has reached the API by then. A model switch the process refuses or does not confirm within 10 s moves the step to a fresh process on the new model instead of failing it.
+- Fix: `smart update` and `install.ps1` install with `npm ci`, which never rewrites `package-lock.json`. `npm install` could rewrite it and then block the next update's `git pull`; a lockfile changed that way is put back before pulling.
+- Fix: `/undo` says "restored 1 file" instead of "restored 1 and removed 0 file".
+- The test stand-in `test/fixtures/fake-claude.mjs` speaks the kept-alive protocol, so demo runs with `SMART_CLAUDE_BIN` work with `runner.keepAlive` on.
 - Fix (Windows): cancelling a task (Esc) or quitting now ends Claude Code's whole process tree (`taskkill /T`), so a dev server or test run it started no longer keeps running.
 - **Kept-alive coding process** (`runner.keepAlive`, on by default): coding steps and follow-up tasks of a conversation go to one running `claude` process (`--input-format stream-json`) instead of starting Claude Code for every step. Measured: a follow-up message took 1.4 s against 3.1 s, at the same cost. The model is switched on the running process; another effort or permission mode gets a fresh one; a process that cannot be kept alive falls back to one `claude` per call; cancelling ends it; idle ones end after 10 minutes. Claude Code reports usage as running totals per process, so each message's own usage and cost are the difference.
 - Refactor: `src/core/pipeline.ts` is split into `src/core/pipeline/` modules (calls, changes, limits, session, steps); behaviour unchanged.

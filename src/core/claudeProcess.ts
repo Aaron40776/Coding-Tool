@@ -31,6 +31,14 @@ interface Turn {
 }
 
 const KILL_GRACE_MS = 2000;
+/**
+ * A process that shows no sign of life this long after its first message never will (an older Claude Code that ignores
+ * `--input-format stream-json` waits for stdin to close). Nothing has reached the API by then, so trying again the
+ * classic way costs nothing.
+ */
+export const FIRST_OUTPUT_MS = 30_000;
+/** How long a model switch may take before the process is replaced by a fresh one on the new model. */
+export const CONTROL_TIMEOUT_MS = 10_000;
 
 /** One long-lived `claude -p --input-format stream-json` process. One message at a time. */
 export class ClaudeProcess {
@@ -42,6 +50,8 @@ export class ClaudeProcess {
   private turn: Turn | null = null;
   private controls = new Map<string, { resolve: () => void; reject: (e: Error) => void }>();
   private controlId = 0;
+  /** Whether the process has written anything at all. */
+  private heard = false;
   /** Claude Code reports usage and cost as running totals for the process: each turn's own is the difference. */
   private seen: Usage = emptyUsage();
 
@@ -50,6 +60,7 @@ export class ClaudeProcess {
     first: RunClaudeOptions,
     command: ClaudeCommand,
     spawnFn: typeof nodeSpawn,
+    private readonly limits: { firstOutputMs: number; controlMs: number } = { firstOutputMs: FIRST_OUTPUT_MS, controlMs: CONTROL_TIMEOUT_MS },
   ) {
     this.model = first.model;
     const args = [...buildArgs(first), '--input-format', 'stream-json'];
@@ -75,10 +86,22 @@ export class ClaudeProcess {
     if (this.dead) throw new SmartError('claude', 'The kept-alive Claude Code process has ended.');
     if (o.signal?.aborted) throw cancelled();
     if (o.model !== this.model) {
-      await this.control({ subtype: 'set_model', model: o.model });
+      try {
+        await this.control({ subtype: 'set_model', model: o.model });
+      } catch (e) {
+        // The process cannot switch: a fresh one started on the new model can.
+        throw new ProcessUnusable(e instanceof SmartError ? e : new SmartError('claude', String(e)), true);
+      }
       this.model = o.model;
+      if (o.signal?.aborted) throw cancelled();
     }
     this.setRef(true);
+    let silence: NodeJS.Timeout | undefined;
+    if (!this.heard) {
+      silence = setTimeout(() => {
+        if (!this.heard) this.abandon(new SmartError('claude', `Claude Code did not answer within ${Math.round(this.limits.firstOutputMs / 1000)} s on a kept-alive process.`));
+      }, this.limits.firstOutputMs);
+    }
     try {
       return await new Promise<ClaudeResult>((resolve, reject) => {
         const onAbort = () => {
@@ -95,21 +118,33 @@ export class ClaudeProcess {
         this.write({ type: 'user', message: { role: 'user', content: o.prompt } });
       });
     } finally {
+      clearTimeout(silence);
       this.setRef(false);
     }
   }
 
   kill(): void {
+    this.abandon(cancelled());
+  }
+
+  /** Ends the process; a message in flight fails with `err` (or as ProcessUnusable if nothing of it arrived yet). */
+  private abandon(err: SmartError): void {
     if (this.dead) return;
     killTree(this.child, 'SIGTERM');
     setTimeout(() => killTree(this.child, 'SIGKILL'), KILL_GRACE_MS).unref?.();
-    this.die(cancelled());
+    this.die(err);
   }
 
   private control(request: Record<string, unknown>): Promise<void> {
     const id = `smart-${++this.controlId}`;
     return new Promise<void>((resolve, reject) => {
-      this.controls.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.controls.delete(id);
+        reject(new SmartError('claude', 'Claude Code did not confirm a setting change.'));
+      }, this.limits.controlMs);
+      timer.unref?.();
+      const settle = (fn: () => void) => { clearTimeout(timer); fn(); };
+      this.controls.set(id, { resolve: () => settle(resolve), reject: (e) => settle(() => reject(e)) });
       this.write({ type: 'control_request', request_id: id, request });
     });
   }
@@ -119,6 +154,7 @@ export class ClaudeProcess {
   }
 
   private onData(chunk: string): void {
+    this.heard = true;
     this.buffer += chunk;
     const lines = this.buffer.split('\n');
     this.buffer = lines.pop() ?? '';
@@ -186,7 +222,8 @@ export class ClaudeProcess {
 
 /** The process could not handle the message at all; the call is repeated the classic way. */
 export class ProcessUnusable extends Error {
-  constructor(readonly error: SmartError) {
+  /** `switchOnly`: this process cannot change model, but a fresh one would work. */
+  constructor(readonly error: SmartError, readonly switchOnly = false) {
     super(error.message);
   }
 }
@@ -200,7 +237,7 @@ export interface ClaudeRunner extends RunClaudeFn {
  * The `run` smart uses: coding calls in a session go to a kept-alive process (see ClaudeProcess); everything else, and
  * everything after a process proved unusable, runs one `claude` per call.
  */
-export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; spawnImpl?: typeof nodeSpawn; command?: ClaudeCommand; oneShot?: RunClaudeFn } = { keepAlive: true }): ClaudeRunner {
+export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; spawnImpl?: typeof nodeSpawn; command?: ClaudeCommand; oneShot?: RunClaudeFn; firstOutputMs?: number; controlMs?: number } = { keepAlive: true }): ClaudeRunner {
   const oneShot = opts.oneShot ?? runClaude;
   const bySession = new Map<string, ClaudeProcess>();
   const idle = new Map<string, NodeJS.Timeout>();
@@ -225,10 +262,21 @@ export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; 
     }
     if (proc?.busy) return oneShot(o);
     clearTimeout(idle.get(id));
+    const limits = { firstOutputMs: opts.firstOutputMs ?? FIRST_OUTPUT_MS, controlMs: opts.controlMs ?? CONTROL_TIMEOUT_MS };
+    const start = () => new ClaudeProcess(key, o, opts.command ?? claudeCommand(), opts.spawnImpl ?? nodeSpawn, limits);
     try {
-      proc ??= new ClaudeProcess(key, o, opts.command ?? claudeCommand(), opts.spawnImpl ?? nodeSpawn);
+      proc ??= start();
       bySession.set(id, proc);
-      const res = await proc.send(o);
+      let res: ClaudeResult;
+      try {
+        res = await proc.send(o);
+      } catch (e) {
+        if (!(e instanceof ProcessUnusable && e.switchOnly)) throw e;
+        drop(id);
+        proc = start();
+        bySession.set(id, proc);
+        res = await proc.send(o);
+      }
       // The session now exists in Claude Code, whether this call started it or resumed it.
       const timer = setTimeout(() => drop(id), opts.idleMs ?? 10 * 60_000);
       timer.unref?.();
