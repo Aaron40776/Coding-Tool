@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 (2026-09-30)
 
+- **Faster classify, plan and review calls**: they now run on a spare `claude` started ahead of time (the classifier's when smart opens, then one after each such call for the next), so Claude Code's start-up (about 1.3 s per call measured on Windows, where every task starts with a classifier call) happens while you type or while a step runs. A spare costs nothing until it is used and ends with smart; at most three wait at a time. Checked against the real classifier: the same classifications as a normal start. Part of `runner.keepAlive`; `smart -p` does not use spares.
 - If keeping Claude Code running between steps does not work on your machine, smart now says so once on screen (and that `runner.keepAlive: false` skips the attempt) instead of only in the debug log.
 - `npm audit` is clean again: esbuild (used only to build smart) is pinned to 0.28.2 through an npm override; the advisory concerned esbuild's development server, which smart never runs.
 

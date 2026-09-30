@@ -199,6 +199,8 @@ export interface RunClaudeOptions {
   maxBudgetUsd?: number | null;
   /** Stream text as it is written (`--include-partial-messages`): replies appear word by word instead of block by block. */
   partial?: boolean;
+  /** Send the prompt as one stream-json message (`--input-format stream-json`), as a pre-started spare process expects. */
+  streamInput?: boolean;
   extraArgs?: string[];
   onEvent?: (e: ClaudeStreamEvent) => void;
   /** Injectable for tests. */
@@ -221,6 +223,7 @@ export function buildArgs(o: RunClaudeOptions): string[] {
   if (o.maxBudgetUsd) args.push('--max-budget-usd', String(o.maxBudgetUsd));
   if (o.partial) args.push('--include-partial-messages');
   if (o.extraArgs?.length) args.push(...o.extraArgs);
+  if (o.streamInput) args.push('--input-format', 'stream-json');
   return args;
 }
 
@@ -330,7 +333,7 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
     });
     // The child may exit before reading stdin; ignore EPIPE.
     child.stdin?.on('error', () => undefined);
-    child.stdin?.end(opts.prompt);
+    child.stdin?.end(opts.streamInput ? `${JSON.stringify({ type: 'user', message: { role: 'user', content: opts.prompt } })}\n` : opts.prompt);
 
     child.on('error', (e) => finish(() => reject(toSpawnError(e))));
     child.on('close', (code) => {
@@ -368,7 +371,7 @@ export function debugTiming(o: RunClaudeOptions, keptAlive = false): { mark: (ki
     done: (code) => {
       const line = {
         time: new Date().toISOString(), model: o.model, tools: o.tools ? (o.tools.length ? 'some' : 'none') : 'all', lean: Boolean(o.lean), effort: o.effort ?? null,
-        session: `${keptAlive ? 'keep-alive ' : ''}${o.session ? (o.session.resume ? 'resume' : 'new') : 'none'}`, exit: code,
+        session: `${keptAlive ? 'keep-alive ' : o.streamInput ? 'warm ' : ''}${o.session ? (o.session.resume ? 'resume' : 'new') : 'none'}`, exit: code,
         ms: { startupUntilReady: at.init ?? null, firstText: at.text ?? null, firstTool: at.tool ?? null, result: at.result ?? null, total: Date.now() - t0 },
       };
       writeDebug(line);

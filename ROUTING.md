@@ -130,6 +130,10 @@ follow-up task goes to the running process (the model is switched on it when rou
 Measured here: a follow-up message took 1.4 s on the running process against 3.1 s with a new one, at the same cost. A different effort or permission mode
 gets a fresh process; calls with JSON output, a per-call budget or a lean start still run one `claude` each; if a process cannot be kept alive, smart
 goes back to one `claude` per call. An idle process ends after 10 minutes and when smart exits.
+The short tool-less calls (classify, plan, review, answers) use a spare `claude` started ahead of time: one for the classifier when smart opens,
+and after each such call one for the next call of the same kind (at most three). A spare waits for its message and costs nothing until then, so
+Claude Code's start-up (about 1.3 s per call on Windows) happens while you type or while a step runs. In the debug log these calls show as
+`"session":"warm none"`. `runner.keepAlive: false` turns spares off too; `smart -p` does not use them.
 `runner.leanCalls` (on by default) starts the tool-less classify, plan and review calls without your hooks, plugins, MCP servers and skills. `$env:SMART_DEBUG=1` writes one line per
 `claude` call to `%USERPROFILE%\.smart\debug.log` (start-up, first text, total) so you can see whether a slow call is Claude Code's own start-up or the model.
 

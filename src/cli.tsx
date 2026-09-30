@@ -6,6 +6,7 @@ import { render } from 'ink';
 import pkg from '../package.json' with { type: 'json' };
 import { resolveClaudeCommand } from './core/claude.js';
 import { createClaudeRunner } from './core/claudeProcess.js';
+import { classifierCall } from './core/classifier.js';
 import { expandHome, globalConfigPath, loadConfig } from './core/config.js';
 import { EventBus } from './core/events.js';
 import { SmartError } from './core/errors.js';
@@ -156,7 +157,8 @@ async function main() {
   process.on('exit', () => checkpoints.dispose());
   const limitsStore = new LimitsStore(expandHome(config.limitsPath));
   // Coding steps reuse one running `claude` per conversation (runner.keepAlive); it is ended when smart exits.
-  const run = createClaudeRunner({ keepAlive: config.runner.keepAlive, onNotice: (message) => bus.emit({ type: 'notice', level: 'warn', message }) });
+  // Short tool-less calls (classify, plan, review) use pre-started spares in the interactive app (see spares.ts).
+  const run = createClaudeRunner({ keepAlive: config.runner.keepAlive, spares: !opts.print, onNotice: (message) => bus.emit({ type: 'notice', level: 'warn', message }) });
   process.on('exit', () => run.dispose());
   const pipeline = new Pipeline(config, bus, cwd, { run, tracker, conversation, conversationStore, checkpoints, limits: limitsStore.load(), limitsStore });
 
@@ -191,6 +193,8 @@ async function main() {
     process.stdout.write(on ? '\x1b[?1049h\x1b[H' : '\x1b[?1049l');
   };
   altScreen(true);
+  // The first task's classifier call then skips Claude Code's start-up (the prompt is not part of the command line).
+  if (config.runner.keepAlive) run.warm({ ...classifierCall(config, cwd), prompt: '', lean: config.runner.leanCalls });
   const restore = () => {
     if (altScreenActive) {
       process.stdout.write(CLEAR_PROGRESS); // never leave a stuck progress bar on the taskbar
