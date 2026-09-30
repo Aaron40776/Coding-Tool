@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Tidy: README cut from 183 to about 80 lines (details live in ROUTING.md, which now also covers effort, faster start-up and undo); `PLAN.md` (the original build plan, long out of date) removed; file-backed stores grouped in `src/core/store/` with one shared atomic-write helper instead of four copies; `/config` also shows effort and lean-call settings.
 - Speed: a greeting ("hey", "thanks") is answered by one short tool-less Haiku call instead of classify + a full Claude Code session (about 8 s down to 3 s here, and far more where plugins, hooks or MCP servers slow every `claude` start-up). Classify, plan and review calls also start `claude` lean (no hooks, plugins, MCP servers or skills; `runner.leanCalls`, on by default, with an automatic fallback if that breaks login).
 - Routing: the classifier also rates difficulty and answers pure questions itself (one Haiku call in total, no coding session); a `hard` single task goes straight to Opus (steps of a written plan stay on Sonnet). The git snapshot now runs while the classifier and planner work instead of before them.
 - Auto effort: each coding step gets a thinking-effort level chosen from the task (low for trivial/small edits, medium for multi-file and large builds, one higher on Opus and on retries; planner high for large builds; none for Haiku). `runner.autoEffort` (default on); an explicit `runner.effort` still wins. Shown next to the model in the plan.

@@ -90,7 +90,13 @@ Copy `smart.config.example.json` to `./smart.config.json` (or `~/.smart/smart.co
 
 **Cap spending**: `limits.maxBudgetUsdPerTask` stops a task once its total cost reaches that many dollars; `limits.maxBudgetUsdPerStep` caps one step.
 
-**Effort per model**: `"runner": { "effort": { "haiku": "low", "opus": "high" } }` passes `--effort` for that tier (levels: low, medium, high, xhigh, max). Unset uses Claude Code's default.
+**Effort**: each coding step gets a thinking-effort level matched to the task (`runner.autoEffort`, on by default): `low` for trivial work and small changes the classifier calls easy,
+`medium` for ordinary edits, multi-file work and large builds, one level higher on Opus, on `hard` tasks and after a failed attempt (think harder before paying for a bigger model);
+the Opus planner runs at `high` for large builds. Haiku gets none. The level shows next to the model (`multi_file → sonnet · effort medium`).
+Pin a level per model with `"runner": { "effort": { "haiku": "low", "opus": "high" } }` (levels: low, medium, high, xhigh, max); a pinned level always wins. `"autoEffort": false` leaves Claude Code's default.
+
+**Faster start-up**: `runner.leanCalls` (on by default) starts the tool-less classify, plan and review calls without your hooks, plugins, MCP servers and skills. `SMART_DEBUG=1` writes one line per
+`claude` call to `~/.smart/debug.log` (start-up, first text, total) so you can see whether a slow call is Claude Code's own start-up or the model.
 
 **Get better results**
 - `"routing": { "large_build": "opus" }` or `"multi_file": "opus"` for harder work.
@@ -99,6 +105,13 @@ Copy `smart.config.example.json` to `./smart.config.json` (or `~/.smart/smart.co
 - Raise `escalation.retriesPerModel`, or set it to `0` to escalate immediately.
 
 **Use different models**: change `models`. Values are passed to `claude --model`, so aliases (`sonnet`) and full model IDs both work.
+
+## Undo and safety net
+
+In a git repository, `smart` snapshots the project directory before and after each step using a private temporary index: your index, branches and history are never touched
+(only a few unreferenced objects are added, which `git gc` removes). That finds every changed file, including ones made by shell commands, shows a per-task summary
+(`Changed 3 files (+120 −4)`), and powers `/diff` and `/undo`. Only the directory you started `smart` in is covered, so in a monorepo a sibling package is never reverted.
+Not a git repo? `git init` enables it. A failed or cancelled task can be continued with `/resume` (or `smart --resume`), from its first unfinished step.
 
 ## Permissions
 
