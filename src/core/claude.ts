@@ -2,6 +2,7 @@ import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { killTree } from './killTree.js';
 import { authError, cancelled, cliMissing, limitError, overloadedError, SmartError } from './errors.js';
 import { emptyUsage, type LimitWindow, type Usage } from './types.js';
 
@@ -310,9 +311,9 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
     };
 
     const onAbort = () => {
-      child.kill('SIGTERM');
+      killTree(child, 'SIGTERM');
       killTimer = setTimeout(() => {
-        child.kill('SIGKILL');
+        killTree(child, 'SIGKILL');
         // If a grandchild still holds our pipes, 'close' may never fire: do not let a cancel hang.
         hangTimer = setTimeout(() => finish(() => reject(cancelled())), 1000);
         hangTimer.unref?.();

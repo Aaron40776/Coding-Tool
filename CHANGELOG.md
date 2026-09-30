@@ -2,6 +2,7 @@
 
 ## 0.3.0 (2026-09-30)
 
+- Fix (Windows): cancelling a task (Esc) or quitting now ends Claude Code's whole process tree (`taskkill /T`), so a dev server or test run it started no longer keeps running.
 - **Kept-alive coding process** (`runner.keepAlive`, on by default): coding steps and follow-up tasks of a conversation go to one running `claude` process (`--input-format stream-json`) instead of starting Claude Code for every step. Measured: a follow-up message took 1.4 s against 3.1 s, at the same cost. The model is switched on the running process; another effort or permission mode gets a fresh one; a process that cannot be kept alive falls back to one `claude` per call; cancelling ends it; idle ones end after 10 minutes. Claude Code reports usage as running totals per process, so each message's own usage and cost are the difference.
 - Refactor: `src/core/pipeline.ts` is split into `src/core/pipeline/` modules (calls, changes, limits, session, steps); behaviour unchanged.
 
