@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
-import { buildArgs, callError, claudeCommand, debugTiming, runClaude, StreamParser, toSpawnError, type ClaudeCommand, type ClaudeResult, type RunClaudeFn, type RunClaudeOptions } from './claude.js';
+import { buildArgs, callError, claudeCommand, debugTiming, runClaude, StreamParser, toSpawnError, writeDebug, type ClaudeCommand, type ClaudeResult, type RunClaudeFn, type RunClaudeOptions } from './claude.js';
 import { cancelled, SmartError } from './errors.js';
 import { killTree } from './killTree.js';
 import { emptyUsage, type Usage } from './types.js';
@@ -39,6 +39,8 @@ const KILL_GRACE_MS = 2000;
 export const FIRST_OUTPUT_MS = 30_000;
 /** How long a model switch may take before the process is replaced by a fresh one on the new model. */
 export const CONTROL_TIMEOUT_MS = 10_000;
+/** How long a replaced process may take to exit before its session is resumed by a fresh one. */
+const REPLACE_WAIT_MS = 3000;
 
 /** One long-lived `claude -p --input-format stream-json` process. One message at a time. */
 export class ClaudeProcess {
@@ -52,6 +54,9 @@ export class ClaudeProcess {
   private controlId = 0;
   /** Whether the process has written anything at all. */
   private heard = false;
+  private readonly startedAt = Date.now();
+  /** Resolves once the process has exited (or could not start). */
+  private readonly exited: Promise<void>;
   /** Claude Code reports usage and cost as running totals for the process: each turn's own is the difference. */
   private seen: Usage = emptyUsage();
 
@@ -72,7 +77,13 @@ export class ClaudeProcess {
       this.stderr = (this.stderr + c).slice(-4000);
     });
     this.child.stdin?.on('error', () => undefined);
-    this.child.on('error', (e) => this.die(toSpawnError(e)));
+    let markExited: () => void = () => undefined;
+    this.exited = new Promise((r) => { markExited = r; });
+    this.child.on('error', (e) => {
+      markExited();
+      this.die(toSpawnError(e));
+    });
+    this.child.on('exit', () => markExited());
     this.child.on('close', (code) => this.die(callError(this.stderr.trim() || `exit code ${code}`, 'Claude Code failed')));
     this.setRef(false);
   }
@@ -127,11 +138,22 @@ export class ClaudeProcess {
     this.abandon(cancelled());
   }
 
+  /** Waits until the process has exited, at most `ms`. */
+  async closed(ms: number): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([this.exited, new Promise<void>((r) => { timer = setTimeout(r, ms); })]);
+    clearTimeout(timer);
+  }
+
   /** Ends the process; a message in flight fails with `err` (or as ProcessUnusable if nothing of it arrived yet). */
   private abandon(err: SmartError): void {
     if (this.dead) return;
     killTree(this.child, 'SIGTERM');
-    setTimeout(() => killTree(this.child, 'SIGKILL'), KILL_GRACE_MS).unref?.();
+    // Only if it is still running: Windows reuses process ids quickly, and `taskkill /T` on a reused id would end
+    // some other process tree (possibly the fresh Claude Code that replaced this one).
+    setTimeout(() => {
+      if (this.child.exitCode === null && this.child.signalCode === null) killTree(this.child, 'SIGKILL');
+    }, KILL_GRACE_MS).unref?.();
     this.die(err);
   }
 
@@ -204,6 +226,9 @@ export class ClaudeProcess {
     for (const c of this.controls.values()) c.reject(err);
     this.controls.clear();
     const turn = this.turn;
+    if (turn && !turn.started && err.kind !== 'cancelled') {
+      writeDebug({ keepAlive: 'given up', model: this.model, afterMs: Date.now() - this.startedAt, heard: this.heard, reason: err.message, stderr: this.stderr.trim().slice(-600) });
+    }
     if (turn) {
       // Died before this message produced anything: the process was unusable (an old Claude Code, a crash on start-up).
       // A cancel is always a cancel, never a reason to try again another way.
@@ -243,11 +268,17 @@ export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; 
   const idle = new Map<string, NodeJS.Timeout>();
   let usable = opts.keepAlive;
 
-  const drop = (id: string) => {
-    bySession.get(id)?.kill();
+  const drop = (id: string): ClaudeProcess | undefined => {
+    const old = bySession.get(id);
+    old?.kill();
     bySession.delete(id);
     clearTimeout(idle.get(id));
     idle.delete(id);
+    return old;
+  };
+  /** Ends a session's process and waits for it to exit, so two Claude Code processes never hold one session at once. */
+  const replace = async (id: string) => {
+    await drop(id)?.closed(REPLACE_WAIT_MS);
   };
 
   const run = async (o: RunClaudeOptions): Promise<ClaudeResult> => {
@@ -257,7 +288,7 @@ export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; 
     const key = JSON.stringify([o.cwd, o.effort ?? '', o.permissionMode ?? '', o.appendSystemPrompt ?? '', o.systemPrompt ?? null, o.bare ?? false, o.extraArgs ?? [], Boolean(o.partial)]);
     let proc = bySession.get(id);
     if (proc && (proc.dead || proc.key !== key)) {
-      drop(id);
+      await replace(id);
       proc = undefined;
     }
     if (proc?.busy) return oneShot(o);
@@ -272,7 +303,7 @@ export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; 
         res = await proc.send(o);
       } catch (e) {
         if (!(e instanceof ProcessUnusable && e.switchOnly)) throw e;
-        drop(id);
+        await replace(id);
         proc = start();
         bySession.set(id, proc);
         res = await proc.send(o);
@@ -286,6 +317,7 @@ export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; 
       if (proc?.dead) bySession.delete(id);
       if (!(e instanceof ProcessUnusable)) throw e;
       // Keeping the process alive does not work here: stop trying for this session and do it the classic way.
+      writeDebug({ keepAlive: 'off for this run', reason: e.message });
       usable = false;
       return oneShot(o);
     }

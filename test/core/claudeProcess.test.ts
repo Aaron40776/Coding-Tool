@@ -1,4 +1,7 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ClaudeResult, RunClaudeFn, RunClaudeOptions } from '../../src/core/claude.js';
@@ -127,5 +130,33 @@ describe('kept-alive claude process', () => {
       expect(t.spawns()).toBe(2);
       expect(t.oneShot).not.toHaveBeenCalled();
     }
+  });
+
+  it('a replaced process has exited before a fresh one resumes its session', async () => {
+    const children: ChildProcess[] = [];
+    const aliveAtSpawn: boolean[] = [];
+    const spawnImpl = ((...a: Parameters<typeof spawn>) => {
+      aliveAtSpawn.push(children.some((c) => c.exitCode === null && c.signalCode === null));
+      const c = spawn(...a);
+      children.push(c);
+      return c;
+    }) as typeof spawn;
+    const run = createClaudeRunner({ keepAlive: true, command, spawnImpl, oneShot: vi.fn<RunClaudeFn>() });
+    runners.push(run);
+    await run(step());
+    await run(step({ effort: 'high', session: { id: 'sess-1', resume: true } }));
+    expect(aliveAtSpawn).toEqual([false, false]);
+  });
+
+  it('a process that is given up leaves a line in the debug log', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'smart-dbg-')), 'debug.log');
+    vi.stubEnv('SMART_DEBUG', '1');
+    vi.stubEnv('SMART_DEBUG_FILE', file);
+    vi.stubEnv('FAKE_SILENT', '1');
+    const t = setup({ firstOutputMs: 300 });
+    await t.run(step());
+    const lines = readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { keepAlive?: string; reason?: string });
+    expect(lines.find((l) => l.keepAlive === 'given up')?.reason).toMatch(/did not answer within/);
+    expect(lines.some((l) => l.keepAlive === 'off for this run')).toBe(true);
   });
 });

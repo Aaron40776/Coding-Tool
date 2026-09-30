@@ -371,15 +371,21 @@ export function debugTiming(o: RunClaudeOptions, keptAlive = false): { mark: (ki
         session: `${keptAlive ? 'keep-alive ' : ''}${o.session ? (o.session.resume ? 'resume' : 'new') : 'none'}`, exit: code,
         ms: { startupUntilReady: at.init ?? null, firstText: at.text ?? null, firstTool: at.tool ?? null, result: at.result ?? null, total: Date.now() - t0 },
       };
-      try {
-        const file = process.env.SMART_DEBUG_FILE || `${os.homedir()}/.smart/debug.log`;
-        mkdirSync(file.replace(/[\\/][^\\/]*$/, '') || '.', { recursive: true });
-        appendFileSync(file, `${JSON.stringify(line)}\n`);
-      } catch {
-        /* diagnostics must never break a run */
-      }
+      writeDebug(line);
     },
   };
+}
+
+/** Appends one JSON line to the debug log when `SMART_DEBUG` is set; never throws. */
+export function writeDebug(entry: object): void {
+  if (!process.env.SMART_DEBUG) return;
+  try {
+    const file = process.env.SMART_DEBUG_FILE || `${os.homedir()}/.smart/debug.log`;
+    mkdirSync(file.replace(/[\\/][^\\/]*$/, '') || '.', { recursive: true });
+    appendFileSync(file, `${JSON.stringify({ time: new Date().toISOString(), ...entry })}\n`);
+  } catch {
+    /* diagnostics must never break a run */
+  }
 }
 
 export function toSpawnError(e: unknown): SmartError {
