@@ -19,6 +19,14 @@ const streamInput = flag('--input-format') === 'stream-json';
 let prompt = '';
 process.stdin.setEncoding('utf8');
 if (!streamInput) for await (const c of process.stdin) prompt += c;
+else if (schemaRaw) {
+  // A pre-started spare (classify, plan, review): wait for its one message.
+  const { createInterface: lines } = await import('node:readline');
+  for await (const line of lines({ input: process.stdin })) {
+    const d = JSON.parse(line);
+    if (d.type === 'user') { prompt = String(d.message.content); break; }
+  }
+}
 
 const usage = (i, o) => ({ input_tokens: i, output_tokens: o, cache_read_input_tokens: 24000, cache_creation_input_tokens: 0 });
 const price = { haiku: 1, sonnet: 3, opus: 5 };

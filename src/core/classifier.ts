@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { RunClaudeFn } from './claude.js';
+import type { RunClaudeFn, RunClaudeOptions } from './claude.js';
 import type { SmartConfig } from './config.js';
 import { SmartError } from './errors.js';
 import { extractJson, structuredFrom } from './json.js';
@@ -80,21 +80,30 @@ export interface ClassifyContext {
 }
 
 /**
+ * The classifier call without its prompt. `lean` mirrors what the call wrapper (pipeline/calls.ts) adds to tool-less
+ * calls, so a spare started from this (spares.ts) matches the real call's command line.
+ */
+export function classifierCall(config: SmartConfig, cwd: string): Omit<RunClaudeOptions, 'prompt'> {
+  return {
+    model: modelFor(routeRole('classifier', config).tier, config),
+    cwd,
+    systemPrompt: CLASSIFIER_SYSTEM,
+    jsonSchema: CLASSIFIER_SCHEMA,
+    tools: [],
+    bare: config.runner.bare,
+  };
+}
+
+/**
  * Classifies a prompt with the cheap model. Auth / missing-CLI / cancel errors propagate;
  * any other failure or malformed output degrades to the Sonnet fallback.
  */
 export async function classify(prompt: string, ctx: ClassifyContext): Promise<{ classification: Classification; usage: Usage }> {
-  const role = routeRole('classifier', ctx.config);
   try {
     const result = await ctx.run({
+      ...classifierCall(ctx.config, ctx.cwd),
       prompt: `${ctx.memory ? `<conversation>\n${ctx.memory}\n</conversation>\n` : ''}<task>\n${prompt}\n</task>`,
-      model: modelFor(role.tier, ctx.config),
-      cwd: ctx.cwd,
       signal: ctx.signal,
-      systemPrompt: CLASSIFIER_SYSTEM,
-      jsonSchema: CLASSIFIER_SCHEMA,
-      tools: [],
-      bare: ctx.config.runner.bare,
     });
     const classification = parseClassification(structuredFrom(result));
     return classification

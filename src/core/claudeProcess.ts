@@ -2,6 +2,7 @@ import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { buildArgs, callError, claudeCommand, debugTiming, runClaude, StreamParser, toSpawnError, writeDebug, type ClaudeCommand, type ClaudeResult, type RunClaudeFn, type RunClaudeOptions } from './claude.js';
 import { cancelled, SmartError } from './errors.js';
 import { killTree } from './killTree.js';
+import { sparable, Spares } from './spares.js';
 import { emptyUsage, type Usage } from './types.js';
 
 /**
@@ -254,7 +255,9 @@ export class ProcessUnusable extends Error {
 }
 
 export interface ClaudeRunner extends RunClaudeFn {
-  /** Ends every kept-alive process. */
+  /** Starts a spare process for the next call like this one (see spares.ts); a no-op when keep-alive is off. */
+  warm: (o: RunClaudeOptions) => void;
+  /** Ends every kept-alive and spare process. */
   dispose: () => void;
 }
 
@@ -262,11 +265,22 @@ export interface ClaudeRunner extends RunClaudeFn {
  * The `run` smart uses: coding calls in a session go to a kept-alive process (see ClaudeProcess); everything else, and
  * everything after a process proved unusable, runs one `claude` per call.
  */
-export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; spawnImpl?: typeof nodeSpawn; command?: ClaudeCommand; oneShot?: RunClaudeFn; firstOutputMs?: number; controlMs?: number; onNotice?: (message: string) => void } = { keepAlive: true }): ClaudeRunner {
+export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; spawnImpl?: typeof nodeSpawn; command?: ClaudeCommand; oneShot?: RunClaudeFn; firstOutputMs?: number; controlMs?: number; onNotice?: (message: string) => void; spares?: boolean } = { keepAlive: true }): ClaudeRunner {
   const oneShot = opts.oneShot ?? runClaude;
   const bySession = new Map<string, ClaudeProcess>();
   const idle = new Map<string, NodeJS.Timeout>();
   let usable = opts.keepAlive;
+  const spares = opts.keepAlive && opts.spares !== false ? new Spares(() => opts.command ?? claudeCommand(), opts.spawnImpl ?? nodeSpawn) : null;
+
+  /** A tool-less one-shot call: on a spare process when one is ready, then a spare is started for the next such call. */
+  const spared = async (o: RunClaudeOptions): Promise<ClaudeResult> => {
+    const child = spares!.take(o);
+    try {
+      return child ? await oneShot({ ...o, streamInput: true, spawnImpl: (() => child) as unknown as typeof nodeSpawn }) : await oneShot(o);
+    } finally {
+      if (!o.signal?.aborted) spares!.warm(o);
+    }
+  };
 
   const drop = (id: string): ClaudeProcess | undefined => {
     const old = bySession.get(id);
@@ -283,7 +297,7 @@ export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; 
 
   const run = async (o: RunClaudeOptions): Promise<ClaudeResult> => {
     const eligible = usable && o.session && !o.jsonSchema && !o.maxBudgetUsd && !o.lean && o.tools === undefined && !o.binary;
-    if (!eligible) return oneShot(o);
+    if (!eligible) return spares && sparable(o) ? spared(o) : oneShot(o);
     const id = o.session!.id;
     const key = JSON.stringify([o.cwd, o.effort ?? '', o.permissionMode ?? '', o.appendSystemPrompt ?? '', o.systemPrompt ?? null, o.bare ?? false, o.extraArgs ?? [], Boolean(o.partial)]);
     let proc = bySession.get(id);
@@ -324,7 +338,9 @@ export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; 
     }
   };
   return Object.assign(run, {
+    warm: (o: RunClaudeOptions) => spares?.warm(o),
     dispose: () => {
+      spares?.dispose();
       for (const id of [...bySession.keys()]) drop(id);
     },
   });

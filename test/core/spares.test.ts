@@ -1,0 +1,68 @@
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { runClaude, type ClaudeResult, type RunClaudeFn, type RunClaudeOptions } from '../../src/core/claude.js';
+import { createClaudeRunner, type ClaudeRunner } from '../../src/core/claudeProcess.js';
+import { sparable, Spares } from '../../src/core/spares.js';
+import { emptyUsage } from '../../src/core/types.js';
+
+const fake = fileURLToPath(new URL('../fixtures/fake-claude-stream.mjs', import.meta.url));
+const command = { cmd: process.execPath, prefix: [fake] };
+const cleanup: { dispose: () => void }[] = [];
+afterEach(() => cleanup.splice(0).forEach((c) => c.dispose()));
+
+const classify = (over: Partial<RunClaudeOptions> = {}): RunClaudeOptions => ({ prompt: 'fix the typo', model: 'haiku', cwd: process.cwd(), systemPrompt: 'Classify.', jsonSchema: { type: 'object' }, tools: [], lean: true, ...over });
+const cold: ClaudeResult = { isError: false, subtype: 'success', text: 'cold start', structured: undefined, usage: emptyUsage(), sessionId: 's', numTurns: 1 };
+
+describe('spare processes for short calls', () => {
+  it('only tool-less one-shot calls use them', () => {
+    expect(sparable(classify())).toBe(true);
+    expect(sparable(classify({ jsonSchema: undefined }))).toBe(true); // an answer: tools: []
+    expect(sparable(classify({ session: { id: 's', resume: false } }))).toBe(false);
+    expect(sparable({ prompt: 'x', model: 'sonnet', cwd: '.' })).toBe(false); // a coding call
+  });
+
+  it('a spare fits only a call with the same command line, and is handed out once', () => {
+    const spares = new Spares(() => command, spawn);
+    cleanup.push(spares);
+    spares.warm(classify());
+    expect(spares.take(classify({ model: 'sonnet' }))).toBeUndefined();
+    const child = spares.take(classify({ prompt: 'another task' })); // the prompt is not part of the command line
+    expect(child?.pid).toBeDefined();
+    expect(spares.take(classify())).toBeUndefined();
+    child?.kill();
+  });
+
+  it('keeps at most three and ends them on dispose', () => {
+    const spares = new Spares(() => command, spawn);
+    for (const model of ['haiku', 'sonnet', 'opus', 'haiku-2']) spares.warm(classify({ model }));
+    expect(spares.size).toBe(3);
+    expect(spares.take(classify({ model: 'haiku' }))).toBeUndefined(); // the oldest was ended
+    spares.dispose();
+    expect(spares.size).toBe(0);
+  });
+
+  it('the runner answers the next short call on a spare, started after the first', async () => {
+    const oneShot = vi.fn<RunClaudeFn>(async (o) => (o.spawnImpl ? runClaude(o) : cold));
+    const run: ClaudeRunner = createClaudeRunner({ keepAlive: true, command, oneShot });
+    cleanup.push(run);
+    expect((await run(classify())).text).toBe('cold start');
+    const texts: string[] = [];
+    const warm = await run(classify({ prompt: 'rename x', onEvent: (e) => { if (e.kind === 'text') texts.push(e.text); } }));
+    expect(oneShot.mock.calls[1]?.[0].streamInput).toBe(true);
+    expect(warm.text).toBe('reply 1 from haiku'); // from the spare, not the cold start
+    expect(texts).toEqual(['reply 1 from haiku: rename x']); // the prompt reached it
+  });
+
+  it('warm() starts one ahead of the first call; no spares when keep-alive is off', async () => {
+    const oneShot = vi.fn<RunClaudeFn>(async (o) => (o.spawnImpl ? runClaude(o) : cold));
+    const run = createClaudeRunner({ keepAlive: true, command, oneShot });
+    cleanup.push(run);
+    run.warm(classify());
+    expect((await run(classify())).text).toBe('reply 1 from haiku');
+    const off = createClaudeRunner({ keepAlive: false, command, oneShot });
+    cleanup.push(off);
+    off.warm(classify());
+    expect((await off(classify())).text).toBe('cold start');
+  });
+});
