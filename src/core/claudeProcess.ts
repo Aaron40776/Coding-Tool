@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { buildArgs, callError, claudeCommand, debugTiming, runClaude, StreamParser, toSpawnError, type ClaudeCommand, type ClaudeResult, type RunClaudeFn, type RunClaudeOptions } from './claude.js';
 import { cancelled, SmartError } from './errors.js';
+import { killTree } from './killTree.js';
 import { emptyUsage, type Usage } from './types.js';
 
 /**
@@ -100,8 +101,8 @@ export class ClaudeProcess {
 
   kill(): void {
     if (this.dead) return;
-    this.child.kill('SIGTERM');
-    setTimeout(() => this.child.kill('SIGKILL'), KILL_GRACE_MS).unref?.();
+    killTree(this.child, 'SIGTERM');
+    setTimeout(() => killTree(this.child, 'SIGKILL'), KILL_GRACE_MS).unref?.();
     this.die(cancelled());
   }
 
