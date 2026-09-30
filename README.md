@@ -1,6 +1,6 @@
 # Smart
 
-[![CI](https://github.com/Aaron40776/Coding-Tool/actions/workflows/ci.yml/badge.svg)](https://github.com/Aaron40776/Coding-Tool/actions/workflows/ci.yml)
+[![CI](https://github.com/Aaron40776/Smart/actions/workflows/ci.yml/badge.svg)](https://github.com/Aaron40776/Smart/actions/workflows/ci.yml)
 
 **Claude Code, routed to the cheapest model that can do each step well.**
 
@@ -17,18 +17,17 @@ Requires Node.js 20+ and the [Claude Code CLI](https://docs.claude.com/claude-co
 `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once (or use `npm.cmd`). `smart` finds `claude.exe`, or the npm
 `claude.cmd` shim; set `SMART_CLAUDE_BIN` to point at a specific executable if detection fails.
 
-`smart` is not on the npm registry yet, so install it from a clone (this works on Windows, macOS and Linux):
+Install `smart` from a clone (works on Windows, macOS and Linux):
 
 ```sh
-git clone https://github.com/Aaron40776/Coding-Tool.git
-cd Coding-Tool
+git clone https://github.com/Aaron40776/Smart.git
+cd Smart
 npm install
 npm run build
 npm link            # puts `smart` on your PATH; then run: smart
 ```
 
 To update later: `git pull`, `npm install`, `npm run build`. To remove: `npm unlink -g @aaron40776/smart`.
-(Once published, `npm install -g @aaron40776/smart` will work too.)
 
 ## Usage
 
@@ -62,7 +61,7 @@ Plans are auto-approved in `-p` mode. It needs no terminal, so it works in pipes
 | `Enter` | send |
 | `Esc` | cancel the running step (or close a view) |
 | `Tab` | switch panel (input / plan / output); `↑ ↓` select or scroll |
-| `/stats` | usage history: today / 7 days / all time, per-model spend, escalations, estimated savings |
+| `/stats` | usage history: today / 7 days / all time, per-model spend, escalations, priciest tasks |
 | `/usage` | your Claude account limits (5-hour and 7-day windows) with reset countdowns |
 | `/cost` | what this session spent, by model |
 | `/config` | the effective routing and safety settings |
@@ -98,9 +97,8 @@ Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prom
 - **Limit-aware routing.** When a window reaches 90% (`usage.downshiftAt`), automatic routing and planning stop choosing Opus (which burns the
   allowance fastest) and use Sonnet instead, and the reason is shown. `--model`, your per-step choices and escalations after a failure are not affected.
   Set `"usage": { "downshiftAt": 0 }` to turn this off.
-- **`/stats`** shows spend for today, the last 7 days and all time, cost per model, how often steps escalated, what classify/plan/review cost, your priciest tasks,
-  and an **estimated saving** versus running everything on Sonnet or Opus. Real costs are what Claude Code reports; the comparison prices the same tokens at
-  list prices from `pricing` in your config, so treat it as an estimate. On tiny tasks the overhead can outweigh the saving, and `/stats` says so.
+- **`/stats`** shows spend for today, the last 7 days and all time, cost per model, how often steps escalated, what classify/plan/review cost, and your priciest tasks.
+  Costs are what Claude Code reports, not estimates.
 
 ## Quality and safety
 
@@ -115,13 +113,19 @@ Type `/` to see command suggestions; `Tab` completes. `↑` recalls earlier prom
 
 ## How it saves tokens (and what it does not)
 
-- A cheap model classifies the task, so trivial questions never reach a big model.
+- A cheap model classifies the task, so trivial questions never reach a big model. A pure question is answered by that same Haiku call (one call, no coding session);
+  a tricky single task (`hard`: deep debugging, concurrency, architecture) goes straight to Opus, while a written plan is made by Opus and executed by Sonnet.
+- Pure small talk ("hey", "thanks") skips even that: one short tool-less Haiku call, a few seconds. Classify, plan and review calls also start Claude Code without hooks,
+  plugins, MCP servers or skills (`"runner": { "leanCalls": false }` turns that off), because each of those slows every start-up and tool-less calls cannot use them.
 - The classifier and planner are stateless, tool-free calls that get only a compact memory of earlier tasks, never the full transcript.
 - Coding steps run in one persisted Claude Code session per conversation, resumed with `--resume`, so **follow-ups have the real history**
   ("now make it red" works). Claude Code caches that history and compacts it as it grows.
 - While that session's prompt cache is warm, follow-ups are not downgraded to a model whose cache would start cold
   (re-reading the history at full price costs more than it saves). See [ROUTING.md](ROUTING.md#conversations-and-follow-ups).
 - Work goes to the cheapest model that passes your checks; failures escalate one tier at a time.
+- **Effort follows the task too.** Each coding step gets a thinking-effort level to match: `low` for trivial and small edits, `medium` for multi-file work and large builds,
+  one level higher on Opus and after a failed attempt (think harder before paying for a bigger model); the Opus planner runs at `high` for large builds. Haiku gets none.
+  It is shown next to the model (`multi_file → sonnet · effort medium`). Set `runner.effort` per model to pin a level, or `"autoEffort": false` to leave Claude Code's default.
 - The planner is instructed to be terse and to add nothing you did not ask for.
 
 What it does not do: shrink Claude Code's own base context (its system prompt and tool definitions, roughly 30k tokens per call in my measurements).
@@ -132,6 +136,9 @@ Claude Code in `--bare` mode to skip hooks, plugins and `CLAUDE.md` discovery. C
 
 `./smart.config.json`, then `~/.smart/smart.config.json`, then built-in defaults. Only set what you want to change.
 See [`smart.config.example.json`](smart.config.example.json) and **[ROUTING.md](ROUTING.md)** for what every rule does and how to tune it.
+
+**Slow? Find out why.** `SMART_DEBUG=1 smart` (PowerShell: `$env:SMART_DEBUG=1; smart`) appends one line per `claude` call to `~/.smart/debug.log` with how long Claude Code took to start up
+(`startupUntilReady`), to the first text, and in total, so you can tell Claude Code's own start-up (plugins, hooks, MCP servers) from the model.
 
 History is written to `~/.smart/history.json` (`trackerPath`). Unknown keys in a config file and risky project-local settings
 (`verify.commands`, `runner.extraArgs` in a `smart.config.json` that came with a repo) produce a warning at startup, so a cloned repo cannot silently run commands.
@@ -170,8 +177,6 @@ npm run dev        # run from source
 Tests mock Claude (`vitest`, `ink-testing-library`). Run the CLI wrapper against the real `claude` with `npm run dev`.
 
 - `SMART_E2E=1 npm test -- test/e2e` runs one tiny task through the real `claude` CLI on Haiku (a few cents) and checks the file, the cost and the saved history.
-- `npm run bench` compares plain Sonnet, plain Opus and `smart` on six small tasks with checkable outcomes. It prints the tasks and a rough cost estimate and **runs nothing** until you add `--run`
-  (`npm run bench -- --run --tasks fizzbuzz,fix-bug --variants sonnet,smart`). It writes `bench-results.md`. The savings claim is not benchmarked yet: run it and share the numbers.
 
 ## License
 

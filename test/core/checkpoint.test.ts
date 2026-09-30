@@ -153,3 +153,45 @@ describe('GitCheckpoints: project directory position', () => {
     expect(existsSync(join(d, 'keepdir', 'new.txt'))).toBe(false);
   });
 });
+
+describe('GitCheckpoints: scoped to the project directory (monorepo)', () => {
+  function mono(): string {
+    const d = repo();
+    mkdirSync(join(d, 'packages', 'a'), { recursive: true });
+    mkdirSync(join(d, 'packages', 'b'), { recursive: true });
+    writeFileSync(join(d, 'packages', 'a', 'a.txt'), 'a\n');
+    writeFileSync(join(d, 'packages', 'b', 'b.txt'), 'b\n');
+    sh(d, 'add', '-A');
+    sh(d, 'commit', '-q', '-m', 'mono');
+    return d;
+  }
+
+  it('does not report or restore files outside the directory smart runs in', async () => {
+    const d = mono();
+    const c = await cp(join(d, 'packages', 'a'));
+    const start = (await c.snapshot())!;
+    writeFileSync(join(d, 'packages', 'a', 'a.txt'), 'changed by smart\n');
+    const end = (await c.snapshot())!;
+    // The user edits a sibling package (and the root) by hand after the task
+    writeFileSync(join(d, 'packages', 'b', 'b.txt'), 'my own precious edit\n');
+    writeFileSync(join(d, 'a.txt'), 'root edit\n');
+    const now = (await c.snapshot())!;
+    expect((await c.changes(start, end))!.files).toEqual([{ path: 'packages/a/a.txt', status: 'M' }]);
+    expect((await c.changes(start, now))!.files.map((f) => f.path)).toEqual(['packages/a/a.txt']);
+    await c.restore(start, now);
+    expect(readFileSync(join(d, 'packages', 'a', 'a.txt'), 'utf8')).toBe('a\n');
+    expect(readFileSync(join(d, 'packages', 'b', 'b.txt'), 'utf8')).toBe('my own precious edit\n');
+    expect(readFileSync(join(d, 'a.txt'), 'utf8')).toBe('root edit\n');
+  });
+
+  it('/diff is a plain unified diff even when git is configured with an external diff tool', async () => {
+    const d = repo();
+    sh(d, 'config', 'diff.external', 'false'); // would run `false` instead of producing a diff
+    const c = await cp(d);
+    const a = (await c.snapshot())!;
+    writeFileSync(join(d, 'a.txt'), 'one\nchanged\n');
+    const text = await c.diff(a, (await c.snapshot())!);
+    expect(text).toContain('+changed');
+  });
+});
+

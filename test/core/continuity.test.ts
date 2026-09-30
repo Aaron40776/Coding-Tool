@@ -213,12 +213,15 @@ describe('warm-cache routing across follow-ups', () => {
 
 describe('effort and budget', () => {
   it('passes the configured --effort for the tier used', async () => {
-    const t = setup({ config: (c) => { c.runner.effort = { sonnet: 'low' }; } });
+    const t = setup({ config: (c) => { c.runner.effort = { sonnet: 'high' }; } });
     await t.pipeline.runTask('x');
-    expect(t.executors()[0]?.effort).toBe('low');
-    const u = setup();
-    await u.pipeline.runTask('x');
-    expect(u.executors()[0]?.effort).toBeUndefined();
+    expect(t.executors()[0]?.effort).toBe('high'); // an explicit setting beats the automatic choice
+    const auto = setup();
+    await auto.pipeline.runTask('x');
+    expect(auto.executors()[0]?.effort).toBe('medium'); // an ordinary small edit on Sonnet
+    const off = setup({ config: (c) => { c.runner.autoEffort = false; } });
+    await off.pipeline.runTask('x');
+    expect(off.executors()[0]?.effort).toBeUndefined();
   });
 
   it('stops the task when its budget is reached and does not start the next step', async () => {

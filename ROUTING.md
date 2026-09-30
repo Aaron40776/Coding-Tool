@@ -5,7 +5,7 @@ decision is shown in the UI with its reason (for example `multi_file → sonnet`
 
 ## The pipeline
 
-1. **Classify** (cheap model, default Haiku). Scores your prompt as one of four complexities and says whether it needs a plan.
+1. **Classify** (cheap model, default Haiku). Scores your prompt as one of four complexities, says whether it needs a plan and how hard it is (`easy`, `normal`, `hard`). If the prompt is a pure question that needs none of your files, tools or current information, the classifier **answers it in the same call**: one Haiku call in total, no coding session. Greetings ("hey", "thanks") skip even the classifier.
 2. **Plan** (default Opus), only when the task needs one. A large build always does. `--no-plan` turns this off.
 3. **Route** every step to a model.
 4. **Execute** each step with a lean prompt, then **verify** it (tests, lint, build).
@@ -30,7 +30,10 @@ For each step, the first rule that applies wins:
 2. **Your per-step choice** on the plan approval screen (press `m`).
 3. **Keyword rules**: `routing.keywordRules`, case-insensitive regexes matched against the step text (or your prompt, when there is no plan). First match wins.
 4. **Unusable classifier output**: if the classifier fails or returns malformed JSON, the task runs on **sonnet** and a warning is shown.
-5. **The complexity map**: the table above.
+5. **Hard tasks**: when the classifier marks a non-trivial task `hard` (tricky debugging, concurrency, algorithms, architecture, security) and there is no written plan, it goes straight to **opus**. The steps of a written plan do not: Opus already did the thinking in the plan, so Sonnet executes them.
+6. **The complexity map**: the table above.
+
+When an account limit is nearly used up (`usage.downshiftAt`), automatic Opus choices are downshifted to Sonnet. Forced models and your per-step choices are never changed.
 
 ## Conversations and follow-ups
 

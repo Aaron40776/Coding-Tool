@@ -1,7 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildArgs, resolveClaudeCommand, resolvePermissionMode, runClaude, StreamParser, type ClaudeStreamEvent } from '../../src/core/claude.js';
 import { SmartError } from '../../src/core/errors.js';
 
@@ -70,6 +72,13 @@ describe('StreamParser', () => {
 });
 
 describe('buildArgs / resolvePermissionMode', () => {
+  it('lean skips settings, MCP servers and skills; off by default', () => {
+    const lean = buildArgs({ prompt: 'x', model: 'haiku', cwd: '.', tools: [], lean: true });
+    expect(lean).toEqual(expect.arrayContaining(['--strict-mcp-config', '--disable-slash-commands']));
+    expect(lean[lean.indexOf('--setting-sources') + 1]).toBe('');
+    expect(buildArgs({ prompt: 'x', model: 'haiku', cwd: '.' })).not.toContain('--strict-mcp-config');
+  });
+
   it('builds headless flags', () => {
     const args = buildArgs({ prompt: 'x', model: 'haiku', cwd: '.', tools: [], systemPrompt: 'sys', jsonSchema: { type: 'object' }, permissionMode: 'acceptEdits', bare: true, maxBudgetUsd: 1, extraArgs: ['--foo'] });
     expect(args).toEqual(expect.arrayContaining(['-p', '--model', 'haiku', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--tools', '', '--system-prompt', 'sys', '--permission-mode', 'acceptEdits', '--bare', '--max-budget-usd', '1', '--foo']));
@@ -129,6 +138,25 @@ interface FakeChild extends EventEmitter {
 
 describe('runClaude', () => {
   const base = { prompt: 'hi', model: 'haiku', cwd: '.' };
+
+  it('SMART_DEBUG appends a timing line per call, and does nothing without it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'smart-dbg-'));
+    const file = join(dir, 'nested', 'debug.log');
+    const run = () => runClaude({ ...base, tools: [], lean: true, effort: 'low', spawnImpl: fakeSpawn((c) => { c.stdout.write(fixture('tool-use.jsonl')); c.emit('close', 0); }) });
+    await run();
+    expect(existsSync(file)).toBe(false);
+    vi.stubEnv('SMART_DEBUG', '1');
+    vi.stubEnv('SMART_DEBUG_FILE', file);
+    try {
+      await run();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const line = JSON.parse(readFileSync(file, 'utf8').trim());
+    expect(line).toMatchObject({ model: 'haiku', tools: 'none', lean: true, effort: 'low', session: 'none', exit: 0 });
+    expect(line.ms.total).toBeGreaterThanOrEqual(0);
+    expect(line.ms.result).not.toBeNull();
+  });
 
   it('streams events and resolves with the result', async () => {
     const seen: string[] = [];

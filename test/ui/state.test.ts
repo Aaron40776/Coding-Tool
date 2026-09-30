@@ -200,4 +200,13 @@ describe('shortPath', () => {
     expect(shortPath('C:\\Users\\Anton\\Documents\\Projects\\my-app', 20)).toBe('…/Projects/my-app');
     expect(shortPath('/x/' + 'y'.repeat(60), 20).length).toBeLessThanOrEqual(20);
   });
+
+  it('only shortens the home directory at a path boundary', async () => {
+    const { shortPath } = await import('../../src/ui/App.js');
+    const os = await import('node:os');
+    const home = os.homedir();
+    expect(shortPath(`${home}/proj`, 40)).toBe('~/proj');
+    expect(shortPath(home, 40)).toBe('~');
+    expect(shortPath(`${home}x/proj`, 40)).toBe(`${home}x/proj`); // /home/al vs /home/alice
+  });
 });

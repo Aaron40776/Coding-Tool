@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { authError, cancelled, cliMissing, SmartError } from './errors.js';
 import { emptyUsage, type LimitWindow, type Usage } from './types.js';
@@ -179,6 +180,11 @@ export interface RunClaudeOptions {
   tools?: string[];
   permissionMode?: string;
   bare?: boolean;
+  /**
+   * For tool-less calls: skip user/project settings (hooks, plugins), MCP servers and skills. They cannot matter without
+   * tools, but each one slows every `claude` start-up.
+   */
+  lean?: boolean;
   maxBudgetUsd?: number | null;
   extraArgs?: string[];
   onEvent?: (e: ClaudeStreamEvent) => void;
@@ -198,6 +204,7 @@ export function buildArgs(o: RunClaudeOptions): string[] {
   if (o.jsonSchema) args.push('--json-schema', JSON.stringify(o.jsonSchema));
   if (o.permissionMode) args.push('--permission-mode', o.permissionMode);
   if (o.bare) args.push('--bare');
+  if (o.lean) args.push('--strict-mcp-config', '--disable-slash-commands', '--setting-sources', '');
   if (o.maxBudgetUsd) args.push('--max-budget-usd', String(o.maxBudgetUsd));
   if (o.extraArgs?.length) args.push(...o.extraArgs);
   return args;
@@ -238,6 +245,7 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
     }
 
     const parser = new StreamParser();
+    const timing = debugTiming(opts);
     let result: ClaudeResult | undefined;
     let stderr = '';
     let settled = false;
@@ -255,6 +263,7 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
 
     const handle = (events: ClaudeStreamEvent[]) => {
       for (const ev of events) {
+        timing?.mark(ev.kind);
         if (ev.kind === 'result') result = ev.result;
         opts.onEvent?.(ev);
       }
@@ -285,12 +294,15 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
     child.on('error', (e) => finish(() => reject(toSpawnError(e))));
     child.on('close', (code) => {
       handle(parser.end());
+      timing?.done(code);
       finish(() => {
         if (opts.signal?.aborted) return reject(cancelled());
         if (result) {
           if (result.isError) {
             const detail = result.text || result.subtype || 'unknown error';
-            return reject(isAuthFailure(detail) ? authError(detail) : new SmartError('claude', `Claude Code reported an error: ${detail}`));
+            const err = isAuthFailure(detail) ? authError(detail) : new SmartError('claude', `Claude Code reported an error: ${detail}`);
+            err.usage = result.usage; // the call still cost money
+            return reject(err);
           }
           return resolve(result);
         }
@@ -299,6 +311,36 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
       });
     });
   });
+}
+
+/**
+ * `SMART_DEBUG=1` appends one line per `claude` call to ~/.smart/debug.log (or `SMART_DEBUG_FILE`): how long start-up took
+ * (spawn until Claude Code reports it is ready), how long until the first text, and the total. It shows whether a slow
+ * call is Claude Code's own start-up (plugins, hooks, MCP servers) or the model.
+ */
+function debugTiming(o: RunClaudeOptions): { mark: (kind: string) => void; done: (code: number | null) => void } | null {
+  if (!process.env.SMART_DEBUG) return null;
+  const t0 = Date.now();
+  const at: Record<string, number> = {};
+  return {
+    mark: (kind) => {
+      at[kind] ??= Date.now() - t0;
+    },
+    done: (code) => {
+      const line = {
+        time: new Date().toISOString(), model: o.model, tools: o.tools ? (o.tools.length ? 'some' : 'none') : 'all', lean: Boolean(o.lean), effort: o.effort ?? null,
+        session: o.session ? (o.session.resume ? 'resume' : 'new') : 'none', exit: code,
+        ms: { startupUntilReady: at.init ?? null, firstText: at.text ?? null, firstTool: at.tool ?? null, result: at.result ?? null, total: Date.now() - t0 },
+      };
+      try {
+        const file = process.env.SMART_DEBUG_FILE || `${os.homedir()}/.smart/debug.log`;
+        mkdirSync(file.replace(/[\\/][^\\/]*$/, '') || '.', { recursive: true });
+        appendFileSync(file, `${JSON.stringify(line)}\n`);
+      } catch {
+        /* diagnostics must never break a run */
+      }
+    },
+  };
 }
 
 function toSpawnError(e: unknown): SmartError {

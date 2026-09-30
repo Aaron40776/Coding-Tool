@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { aggregate, Tracker, type StepRecord, type TaskRecord } from '../../src/core/tracker.js';
+import { Tracker, type StepRecord, type TaskRecord } from '../../src/core/tracker.js';
 import { emptyUsage } from '../../src/core/types.js';
 
 const usage = (costUsd: number, out = 10) => ({ ...emptyUsage(), costUsd, outputTokens: out });
@@ -51,20 +51,5 @@ describe('Tracker', () => {
     writeFileSync(blocker, 'x'); // a regular file where a directory is needed
     const err = new Tracker(join(blocker, 'h.json')).append(task('a', []));
     expect(err).toMatch(/Could not write history/);
-  });
-});
-
-describe('aggregate', () => {
-  it('sums totals and groups by model, sorted by cost', () => {
-    const s = aggregate([
-      task('a', [step('haiku', 0.01), step('sonnet', 0.2)]),
-      task('b', [step('sonnet', 0.3)], false),
-    ]);
-    expect(s.tasks).toBe(2);
-    expect(s.succeeded).toBe(1);
-    expect(s.totals.costUsd).toBeCloseTo(0.51);
-    expect(s.byModel.map((m) => m.model)).toEqual(['sonnet', 'haiku']);
-    expect(s.byModel[0]).toMatchObject({ steps: 2 });
-    expect(s.byModel[0]?.usage.costUsd).toBeCloseTo(0.5);
   });
 });

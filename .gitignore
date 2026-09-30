@@ -4,4 +4,3 @@ coverage/
 *.log
 .smart/
 .DS_Store
-bench-results.md

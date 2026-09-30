@@ -8,7 +8,6 @@ import { budget, PlanApproval } from '../../src/ui/components/PlanApproval.js';
 import { PlanChecklist } from '../../src/ui/components/PlanChecklist.js';
 import { StatsView } from '../../src/ui/components/StatsView.js';
 import { LimitsMeter } from '../../src/ui/components/LimitsMeter.js';
-import { defaultConfig } from '../../src/core/config.js';
 import { summarize } from '../../src/core/stats.js';
 import { StepBadge } from '../../src/ui/components/StepBadge.js';
 import { fmtCost, fmtDuration, fmtTokens } from '../../src/ui/format.js';
@@ -85,6 +84,25 @@ describe('PipelineBar', () => {
   });
 });
 
+describe('PlanChecklist windowing', () => {
+  const many = { summary: 's', features: [], fileStructure: [], steps: Array.from({ length: 10 }, (_, i) => ({ id: `s${i}`, title: `Step number ${i + 1}`, instructions: 'x', files: [], acceptance: [] })) };
+  const rts = Object.fromEntries(many.steps.map((s) => [s.id, { tier: 'sonnet' as const, model: 'sonnet', reason: 'multi_file → sonnet' }]));
+
+  it('keeps the running step visible in a long plan and says how many are hidden', () => {
+    const status = Object.fromEntries(many.steps.map((s, i) => [s.id, i < 7 ? 'done' : i === 7 ? 'active' : 'pending'])) as never;
+    const f = render(<PlanChecklist plan={many} routes={rts} stepStatus={status} escalatedTo={{}} height={12} />).lastFrame()!;
+    expect(f).toContain('Step number 8');
+    expect(f).not.toContain('Step number 1 ');
+    expect(f).toMatch(/↑ \d+ earlier/);
+  });
+  it('shows everything when it fits', () => {
+    const f = render(<PlanChecklist plan={many} routes={rts} stepStatus={{}} escalatedTo={{}} height={40} />).lastFrame()!;
+    expect(f).toContain('Step number 1');
+    expect(f).toContain('Step number 10');
+    expect(f).not.toContain('more');
+  });
+});
+
 describe('PlanChecklist', () => {
   it('ticks steps live and shows a badge and routing reason per step', () => {
     const f = render(
@@ -135,6 +153,21 @@ describe('OutputLog', () => {
     const rows = toRows([{ id: 1, kind: 'info', text: 'word '.repeat(20).trim() }, { id: 2, kind: 'tool', text: 'Edit ' + 'p/'.repeat(30) }], 30);
     expect(rows.filter((r) => r.kind === 'info').length).toBeGreaterThan(2);
     expect(rows.filter((r) => r.kind === 'tool')).toHaveLength(1);
+  });
+  it('shows replies, help and diffs in full; only long command output is capped', () => {
+    const long = Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n');
+    expect(toRows([{ id: 1, kind: 'text', text: long }])).toHaveLength(30);
+    expect(toRows([{ id: 1, kind: 'info', text: long }])).toHaveLength(30);
+    expect(toRows([{ id: 1, kind: 'diff-add', text: long }])).toHaveLength(30);
+    expect(toRows([{ id: 1, kind: 'verify-fail', text: long }])).toHaveLength(9);
+  });
+  it('never scrolls past the first row and reports how far it can scroll', () => {
+    const lines = Array.from({ length: 30 }, (_, i) => ({ id: i, kind: 'info' as const, text: `row ${i}` }));
+    const seen: number[] = [];
+    const f = render(<OutputLog lines={lines} height={8} scroll={500} onMaxScroll={(n) => seen.push(n)} />).lastFrame()!;
+    expect(f).toContain('row 0'); // clamped to the top instead of a blank pane
+    expect(f).not.toContain('row 29');
+    expect(seen.at(-1)).toBe(30 - 5);
   });
   it('caps very long multi-line entries', () => {
     const rows = toRows([{ id: 1, kind: 'verify-fail', text: Array.from({ length: 40 }, (_, i) => `e${i}`).join('\n') }]);
@@ -434,6 +467,18 @@ describe('PlanApproval', () => {
     expect(onApprove.mock.calls[0]![0].steps).toHaveLength(3);
   });
 
+  it('an empty name for a new step cancels it instead of adding a blank step', async () => {
+    const { stdin, onApprove } = setup();
+    stdin.write('a');
+    await wait();
+    stdin.write(KEYS.enter);
+    await wait();
+    stdin.write(KEYS.enter);
+    await waitFor(() => onApprove.mock.calls.length === 1);
+    expect(onApprove.mock.calls[0]![0].steps).toHaveLength(3);
+    expect(onApprove.mock.calls[0]![0].steps.every((s: { title: string }) => s.title.trim() !== '')).toBe(true);
+  });
+
   it('deletes a step with d, but never the last one', async () => {
     const { stdin, lastFrame, onApprove } = setup();
     stdin.write('d');
@@ -584,7 +629,6 @@ describe('PlanApproval: long plans on small terminals (regression)', () => {
 });
 
 describe('StatsView', () => {
-  const pricing = defaultConfig().pricing;
   const now = Date.now();
   const mkTask = (id: string, cost: number, model: string, ok = true) => ({
     id, startedAt: new Date(now - 60_000).toISOString(), prompt: `prompt ${id}`, overhead: { ...emptyUsage(), costUsd: 0.01 }, ok, totals: { ...emptyUsage(), costUsd: cost + 0.01, inputTokens: 1000, outputTokens: 500 },
@@ -592,12 +636,12 @@ describe('StatsView', () => {
   });
 
   it('shows an empty state', () => {
-    expect(render(<StatsView summary={summarize([], { now, pricing })} path="/x/h.json" />).lastFrame()).toContain('No tasks recorded yet');
+    expect(render(<StatsView summary={summarize([], { now })} path="/x/h.json" />).lastFrame()).toContain('No tasks recorded yet');
   });
 
-  it('shows windows, per-model spend, escalations, estimated savings and the priciest tasks', () => {
+  it('shows windows, per-model spend, escalations and the priciest tasks', () => {
     const tasks = [mkTask('a', 0.25, 'sonnet'), mkTask('b', 0.05, 'haiku', false)];
-    const f = render(<StatsView summary={summarize(tasks, { now, pricing })} path="/x/h.json" width={110} />).lastFrame()!;
+    const f = render(<StatsView summary={summarize(tasks, { now })} path="/x/h.json" width={110} />).lastFrame()!;
     expect(f).toContain('Today');
     expect(f).toContain('Last 7d');
     expect(f).toContain('All time');
@@ -606,15 +650,14 @@ describe('StatsView', () => {
     expect(f).toContain('haiku');
     expect(f).toContain('classify · plan · review');
     expect(f).toContain('Escalated 0 of 2 steps');
-    expect(f).toContain('Estimated savings');
-    expect(f).toContain('vs all-opus');
+    expect(f).not.toContain('Estimated savings');
     expect(f).toContain('prompt a');
     expect(f).toContain('/x/h.json');
   });
 
   it('shows the account limits with bars and reset times when known', () => {
     const limits = { at: now, windows: { five_hour: { utilization: 0.74, resetsAt: now / 1000 + 8040 }, seven_day: { utilization: 0.18, resetsAt: now / 1000 + 3 * 86400 } } };
-    const f = render(<StatsView summary={summarize([], { now, pricing })} limits={limits} nowMs={now} path="p" width={100} />).lastFrame()!;
+    const f = render(<StatsView summary={summarize([], { now })} limits={limits} nowMs={now} path="p" width={100} />).lastFrame()!;
     expect(f).toContain('Your Claude account');
     expect(f).toContain('5h');
     expect(f).toContain('74%');

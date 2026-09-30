@@ -26,7 +26,9 @@ type Focus = 'input' | 'plan' | 'output';
 /** Home as ~, and when too long only the last path components: `…/parent/project`. */
 export function shortPath(p: string, max = 28): string {
   const home = homedir();
-  const withTilde = home && p.startsWith(home) ? `~${p.slice(home.length)}` : p;
+  // Only at a path boundary: /home/al must not turn /home/alice into ~ice.
+  const inHome = home.length > 1 && (p === home || p.startsWith(`${home}/`) || p.startsWith(`${home}\\`));
+  const withTilde = inHome ? `~${p.slice(home.length)}` : p;
   if (withTilde.length <= max) return withTilde;
   const parts = withTilde.split(/[\\/]/).filter(Boolean);
   let out = parts.at(-1) ?? withTilde;
@@ -46,8 +48,6 @@ export interface AppProps {
   cwd: string;
   version: string;
   permissionMode: string;
-  /** For the savings estimate in /stats and /cost (list prices, editable in config). */
-  pricing: import('../core/config.js').SmartConfig['pricing'];
   initial?: { prompt: string; dryRun?: boolean; noPlan?: boolean; model?: ModelTier | null; resume?: boolean };
   inputHistory?: InputHistory;
   /** Info lines shown at startup (e.g. "Continuing your previous conversation"). */
@@ -59,7 +59,7 @@ export interface AppProps {
 
 const WELCOME = ['Claude Code, routed to the cheapest capable model.', 'Type a task and press Enter, e.g. "make me a snake game".', '/help lists commands.'];
 
-export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permissionMode, pricing, initial, startupNotices, inputHistory, oneShot, onExit }: AppProps) {
+export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial, startupNotices, inputHistory, oneShot, onExit }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [size, setSize] = useState({ cols: stdout.columns ?? 100, rows: stdout.rows ?? 30 });
@@ -72,6 +72,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
   const [mode, setMode] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
   const [scroll, setScroll] = useState(0);
+  const maxScroll = useRef(0);
   const [draft, setDraft] = useState('');
   const [history] = useState(() => inputHistory?.load() ?? []);
   const [files] = useState(() => projectFiles(cwd, 400));
@@ -150,9 +151,9 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
       if (key.upArrow) setSelected((s) => Math.max(0, s - 1));
       if (key.downArrow) setSelected((s) => Math.min(Math.max(0, steps - 1), s + 1));
     } else if (focus === 'output') {
-      if (key.upArrow) setScroll((s) => s + 1);
+      if (key.upArrow) setScroll((s) => Math.min(maxScroll.current, s + 1));
       if (key.downArrow) setScroll((s) => Math.max(0, s - 1));
-      if (key.pageUp) setScroll((s) => s + 10);
+      if (key.pageUp) setScroll((s) => Math.min(maxScroll.current, s + 10));
       if (key.pageDown) setScroll((s) => Math.max(0, s - 10));
       if (key.end) setScroll(0);
     }
@@ -181,7 +182,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
         return dispatch({ type: 'ui:info', text: usageLines(state.limits, Date.now()).join('\n') });
       case 'cost': {
         const mine = tracker.load().filter((t) => Date.parse(t.startedAt) >= sessionStart.current);
-        return dispatch({ type: 'ui:info', text: costLines(summarize(mine, { now: Date.now(), pricing })).join('\n') });
+        return dispatch({ type: 'ui:info', text: costLines(summarize(mine, { now: Date.now() })).join('\n') });
       }
       case 'config':
         return dispatch({ type: 'ui:info', text: pipeline.describe().join('\n') });
@@ -238,7 +239,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
         <Box flexShrink={1}>
           <Text wrap="truncate-end">
             <Text color={ACCENT} bold>✻ smart</Text>
-            <Text dimColor>{` v${version}${size.cols >= 120 ? ` · ${shortPath(cwd)}` : ''}${permissionMode === 'bypassPermissions' ? ' · bypass' : ''}`}</Text>
+            <Text dimColor>{` v${version}${size.cols >= 120 ? ` · ${shortPath(cwd)}` : ''}${pipeline.permissionMode === 'bypassPermissions' ? ' · bypass' : ''}`}</Text>
           </Text>
         </Box>
         <Box flexShrink={0} marginLeft={2}>
@@ -256,13 +257,13 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, permiss
       {state.phase === 'approval' && state.plan ? (
         <PlanApproval plan={state.plan} routes={state.routes} onApprove={(p) => pipeline.approvePlan(p)} onCancel={() => pipeline.cancel()} height={mainHeight} width={size.cols} />
       ) : view === 'stats' ? (
-        <StatsView summary={summarize(tracker.load(), { now: Date.now(), pricing })} limits={state.limits} path={trackerPath} height={mainHeight} width={size.cols} />
+        <StatsView summary={summarize(tracker.load(), { now: Date.now() })} limits={state.limits} path={trackerPath} height={mainHeight} width={size.cols} />
       ) : (
         <Box height={mainHeight}>
           <Box width="40%" flexShrink={0} flexDirection="column">
             <PlanChecklist plan={state.plan} routes={state.routes} stepStatus={state.stepStatus} escalatedTo={state.escalatedTo} durations={state.stepDuration} selected={selected} focused={focus === 'plan'} height={mainHeight} />
           </Box>
-          <OutputLog lines={state.output} height={mainHeight} scroll={scroll} width={size.cols - Math.floor(size.cols * 0.4) - 4} focused={focus === 'output'} welcome={WELCOME} />
+          <OutputLog lines={state.output} height={mainHeight} scroll={scroll} width={size.cols - Math.floor(size.cols * 0.4) - 4} focused={focus === 'output'} welcome={WELCOME} onMaxScroll={(n) => { maxScroll.current = n; }} />
         </Box>
       )}
       <InputBox

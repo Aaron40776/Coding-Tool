@@ -76,7 +76,7 @@ export const MODES: Record<string, string> = { bypass: 'bypassPermissions', edit
 export const modeLabel = (mode: string): string => Object.entries(MODES).find(([, v]) => v === mode)?.[0] ?? mode;
 
 export const COMMANDS: { name: string; help: string }[] = [
-  { name: '/stats', help: 'usage history and savings' },
+  { name: '/stats', help: 'usage history and spend' },
   { name: '/usage', help: 'account limits (5h / 7d)' },
   { name: '/cost', help: 'this session\'s spend' },
   { name: '/config', help: 'effective routing settings' },
@@ -98,7 +98,7 @@ export function matchCommands(draft: string): string[] {
 
 export const HELP_TEXT = [
   'Type a task and press Enter. Commands:',
-  '  /stats            usage history, per-model costs, estimated savings',
+  '  /stats            usage history and per-model costs',
   '  /usage            your Claude account limits (5-hour / 7-day) and resets',
   '  /cost             what this session spent, by model',
   '  /config           show the effective routing and safety settings',

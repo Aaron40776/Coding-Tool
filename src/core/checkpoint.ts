@@ -112,7 +112,8 @@ export class GitCheckpoints implements Checkpointer {
       }
     }
     const env = { GIT_INDEX_FILE: this.cacheIndex };
-    const add = await git(['add', '-A', '--', '.'], { cwd: this.root, env });
+    // Only the project directory: a monorepo sibling the user edits elsewhere must not show up in (or be restored by) /undo.
+    const add = await git(['add', '-A', '--', this.prefix || '.'], { cwd: this.root, env });
     if (add.code !== 0) return null;
     const tree = await git(['write-tree'], { cwd: this.root, env });
     return tree.code === 0 && /^[0-9a-f]{40,64}$/.test(tree.stdout.trim()) ? tree.stdout.trim() : null;
@@ -120,7 +121,8 @@ export class GitCheckpoints implements Checkpointer {
 
   async changes(from: string, to: string): Promise<Changes | null> {
     if (!this.available) return null;
-    const names = await git(['diff-tree', '-r', '--no-renames', '--name-status', '-z', from, to], { cwd: this.root });
+    const scope = this.prefix ? ['--', this.prefix] : [];
+    const names = await git(['diff-tree', '-r', '--no-renames', '--name-status', '-z', from, to, ...scope], { cwd: this.root });
     if (names.code !== 0) return null;
     const files: FileChange[] = [];
     const parts = names.stdout.split('\0');
@@ -130,7 +132,7 @@ export class GitCheckpoints implements Checkpointer {
       // T (file <-> symlink type change) is restored like a modification.
       if (path && (status === 'A' || status === 'M' || status === 'D' || status === 'T')) files.push({ path, status: status === 'T' ? 'M' : status });
     }
-    const stat = await git(['diff', '--no-renames', '--numstat', from, to], { cwd: this.root });
+    const stat = await git(['diff', '--no-renames', '--no-ext-diff', '--numstat', from, to, ...scope], { cwd: this.root });
     let insertions = 0;
     let deletions = 0;
     if (stat.code === 0) {
@@ -147,7 +149,8 @@ export class GitCheckpoints implements Checkpointer {
 
   async diff(from: string, to: string): Promise<string | null> {
     if (!this.available) return null;
-    const r = await git(['diff', '--no-renames', '--no-color', from, to], { cwd: this.root });
+    // Plain unified diff whatever the user's git config says (an external difftool or textconv driver would break the output).
+    const r = await git(['diff', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', from, to, ...(this.prefix ? ['--', this.prefix] : [])], { cwd: this.root });
     return r.code === 0 ? r.stdout : null;
   }
 

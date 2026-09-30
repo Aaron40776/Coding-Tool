@@ -10,6 +10,8 @@ import { EventBus, type Stage } from './events.js';
 import { SmartError, cancelled, isCancelled } from './errors.js';
 import { projectContext, projectFiles } from './files.js';
 import { resolveMentions } from './mentions.js';
+import { pickEffort, planEffort } from './effort.js';
+import { CHAT_SYSTEM, isSmallTalk } from './smalltalk.js';
 import { makePlan, singleStepPlan } from './planner.js';
 import { applyWarmCache, route } from './router.js';
 import { reviewStep } from './review.js';
@@ -82,6 +84,10 @@ export class Pipeline {
   private readonly cp: Checkpointer;
   private limits: Limits | null;
   private warnedWindows = new Set<string>();
+  private leanOk = true;
+  /** The task currently running, so a shutdown can wait for its state to be saved (see `settle`). */
+  private current: Promise<unknown> | null = null;
+  private bgSnapshot: Promise<string | null> | null = null;
   /** Every Claude call goes through here so account usage reported in any stream is captured. */
   private readonly run: RunClaudeFn;
 
@@ -94,14 +100,38 @@ export class Pipeline {
     this.conv = deps.conversation ?? newConversation();
     this.cp = deps.checkpoints ?? new NoCheckpoints();
     this.limits = deps.limits ?? null;
-    this.run = (o) =>
-      deps.run({
-        ...o,
-        onEvent: (e) => {
-          if (e.kind === 'limits') this.observeLimits(e.windows, e.status);
-          o.onEvent?.(e);
-        },
-      });
+    const call = async (o: Parameters<RunClaudeFn>[0]) => {
+      try {
+        return await deps.run({
+          ...o,
+          onEvent: (e) => {
+            if (e.kind === 'limits') this.observeLimits(e.windows, e.status);
+            o.onEvent?.(e);
+          },
+        });
+      } catch (e) {
+        // A call that errors (max turns, budget, ...) still spent tokens: count them, or the budget cap and the totals undercount.
+        if (e instanceof SmartError && e.usage) {
+          this.taskUsage = addUsage(this.taskUsage, e.usage);
+          this.bus.emit({ type: 'tokens', usage: e.usage, sessionTotal: this.sessionTotal });
+        }
+        throw e;
+      }
+    };
+    // Tool-less calls (classify, plan, review, small talk) start `claude` lean. If that breaks something that lives in the
+    // settings files (an apiKeyHelper login, a provider or proxy in `env`), retry once the normal way; when that works,
+    // stop using lean flags for this session. If the normal call fails too, lean was not the problem and stays on.
+    this.run = async (o) => {
+      if (!this.leanOk || !config.runner.leanCalls || o.tools?.length !== 0) return call(o);
+      try {
+        return await call({ ...o, lean: true });
+      } catch (e) {
+        if (!(e instanceof SmartError) || (e.kind !== 'auth' && e.kind !== 'claude')) throw e;
+        const res = await call(o);
+        this.leanOk = false;
+        return res;
+      }
+    };
   }
 
   // ---- commands from the frontend -------------------------------------------------------
@@ -171,8 +201,29 @@ export class Pipeline {
 
   // ---- the task ---------------------------------------------------------------------------
 
-  async runTask(prompt: string, opts: TaskOptions = {}): Promise<TaskSummary> {
-    if (this.running) throw new SmartError('internal', 'A task is already running.');
+  runTask(prompt: string, opts: TaskOptions = {}): Promise<TaskSummary> {
+    if (this.running) return Promise.reject(new SmartError('internal', 'A task is already running.'));
+    const p = this.execute(prompt, opts);
+    this.current = p;
+    return p;
+  }
+
+  /** Resolves once the running task (if any) has finished saving its state, or after `ms`. Call after `cancel()` and before exiting. */
+  async settle(ms = 3000): Promise<void> {
+    const p = this.current;
+    if (!p) return;
+    await Promise.race([p.catch(() => undefined), new Promise<void>((r) => setTimeout(r, ms).unref?.())]);
+  }
+
+  private async execute(prompt: string, opts: TaskOptions): Promise<TaskSummary> {
+    const myId = ++this.runId;
+    this.releaseRun = () => {
+      if (this.runId !== myId) return;
+      this.running = false;
+      this.ctl = null;
+      this.approval = null;
+    };
+    const release = this.releaseRun;
     this.running = true;
     this.ctl = new AbortController();
     this.taskUsage = emptyUsage();
@@ -201,11 +252,15 @@ export class Pipeline {
       const memory = renderMemory(this.conv);
       const referenced = resolveMentions(this.cwd, prompt, this.config.limits.maxContextBytes);
       if (referenced.length) emit({ type: 'notice', level: 'info', message: `Using ${referenced.length} referenced file${referenced.length === 1 ? '' : 's'}: ${referenced.map((f) => f.path).join(', ')}` });
+      // Greetings skip the git snapshot, classifier and Claude Code session entirely.
+      if (!dryRun && !opts.resume && !this.forced && !referenced.length && isSmallTalk(prompt)) return await this.respond(prompt, summary, { startedAt, memory, at, stage, touched });
       if (!dryRun && !this.cp.available && !this.warnedNoGit) {
         this.warnedNoGit = true;
         emit({ type: 'notice', level: 'info', message: 'Not a git repository, so /undo and /diff are unavailable here. Run `git init` to enable them.' });
       }
-      startTree = dryRun ? null : await this.cp.snapshot();
+      // The git snapshot runs while the classifier and planner think; it is only needed before the first file is touched.
+      const snapshotting = dryRun ? Promise.resolve(null) : this.cp.snapshot().catch(() => null);
+      this.bgSnapshot = snapshotting;
       const signal = this.ctl.signal;
 
       const resumed = opts.resume ? this.conv.pending : undefined;
@@ -221,7 +276,7 @@ export class Pipeline {
         for (const st of ['classify', 'plan', 'approve'] as const) stage(st, 'skipped');
         const left = plan.steps.filter((x) => !x.skipped && !doneIds.has(x.id)).length;
         emit({ type: 'notice', level: 'info', message: `Resuming: ${doneIds.size} step${doneIds.size === 1 ? '' : 's'} already done, ${left} to go.` });
-        emit({ type: 'plan:ready', plan, routes: this.routePlan(plan, classification) });
+        emit({ type: 'plan:ready', plan, routes: this.routePlan(plan, classification), done: [...doneIds] });
         emit({ type: 'plan:approved', plan });
       } else {
         // 1. classify
@@ -234,12 +289,17 @@ export class Pipeline {
         if (classification.fallback) emit({ type: 'notice', level: 'warn', message: classification.reason });
         stage('classify', 'done');
 
+        // A pure question the classifier could answer on the spot needs no coding session: one call in total.
+        if (classification.answer && !this.forced && !dryRun && !referenced.length) {
+          return await this.respond(prompt, summary, { startedAt, memory, at, stage, touched }, { classification, text: classification.answer });
+        }
+
         // 2. plan
         const wantPlan = !opts.noPlan && (classification.needsPlan || classification.complexity === 'large_build');
         if (wantPlan) {
           at('plan');
           const p = await makePlan(prompt, classification, {
-            config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(), memory,
+            config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(), memory, effort: planEffort(classification.complexity, this.config),
             projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd), referenced,
           });
           this.addCallUsage(p.usage);
@@ -273,6 +333,8 @@ export class Pipeline {
         }
       }
 
+      startTree = await snapshotting;
+
       // 4. execute (+ verify per step)
       at('execute');
       const cursor = { tree: startTree };
@@ -294,25 +356,92 @@ export class Pipeline {
       stage('execute', failed ? 'failed' : 'done');
       return await this.finish(summary, { startedAt, prompt, touched, startTree, doneIds });
     } catch (e) {
-      if (isCancelled(e)) {
-        summary.cancelled = true;
-        stage(current, 'failed');
-        emit({ type: 'task:cancelled', taskId });
-      } else {
+      summary.ok = false;
+      if (isCancelled(e)) summary.cancelled = true;
+      // Save the state (checkpoint, /resume, cost record) BEFORE telling the frontend the task is over: a one-shot run exits
+      // as soon as it sees the terminal event, and would otherwise lose all of it.
+      const out = await this.finish(summary, { startedAt, prompt, touched, startTree, aborted: true, doneIds: doneRef.ids });
+      stage(current, 'failed');
+      if (summary.cancelled) emit({ type: 'task:cancelled', taskId });
+      else {
         const err = e instanceof SmartError ? e : new SmartError('internal', (e as Error).message ?? String(e));
-        stage(current, 'failed');
         emit({ type: 'error', kind: err.kind, message: err.message, hint: err.hint });
       }
-      summary.ok = false;
-      return await this.finish(summary, { startedAt, prompt, touched, startTree, aborted: true, doneIds: doneRef.ids });
+      return out;
     } finally {
-      this.running = false;
-      this.ctl = null;
-      this.approval = null;
+      release();
     }
   }
 
   // ---- internals --------------------------------------------------------------------------
+
+  private runId = 0;
+  private releaseRun: () => void = () => undefined;
+
+  /**
+   * Ends the running task for callers. Safe to call twice, and a late call from an old run never touches a newer one
+   * (a frontend may start the next task the moment it sees the terminal event).
+   */
+  private release(): void {
+    this.releaseRun();
+  }
+
+  /** Answers without a coding session: small talk (one short Haiku call) or a question the classifier already answered (no extra call). */
+  private async respond(
+    prompt: string,
+    summary: TaskSummary,
+    x: { startedAt: string; memory: string; at: (s: Stage) => void; stage: (s: Stage, st: 'active' | 'done' | 'skipped' | 'failed') => void; touched: string[] },
+    /** The classifier already answered (one call in total): show that answer instead of asking again. */
+    ready?: { classification: Classification; text: string },
+  ): Promise<TaskSummary> {
+    const emit = this.bus.emit.bind(this.bus);
+    const tier: ModelTier = ready ? this.config.routing.classifier : 'haiku';
+    const decision: RouteDecision = ready
+      ? { tier, model: this.config.models[tier], reason: 'answered by the classifier: no second call' }
+      : { tier, model: this.config.models[tier], reason: 'small talk: no classification, no tools' };
+    const classification: Classification = ready?.classification ?? { complexity: 'trivial', needsPlan: false, reason: 'Small talk.' };
+    const plan = singleStepPlan(prompt);
+    const step = plan.steps[0]!;
+    summary.classification = classification;
+    summary.plan = plan;
+    if (!ready) {
+      emit({ type: 'classified', classification, route: decision });
+      x.stage('classify', 'skipped');
+    }
+    x.stage('plan', 'skipped');
+    x.stage('approve', 'skipped');
+    emit({ type: 'plan:ready', plan, routes: { [step.id]: decision } });
+    x.at('execute');
+    emit({ type: 'step:start', stepId: step.id, title: 'Reply', route: decision, attempt: 1, at: this.now() });
+    const rec: StepRecord = { stepId: step.id, title: 'Reply', model: decision.model, tier, attempts: 1, escalated: false, usage: emptyUsage(), outcome: 'failed' };
+    try {
+      const res = ready
+        ? null
+        : await this.run({
+            prompt: x.memory ? `<conversation>\n${x.memory}\n</conversation>\n\n${prompt}` : prompt,
+            model: decision.model, systemPrompt: CHAT_SYSTEM, tools: [], cwd: this.cwd, signal: this.ctl!.signal,
+          });
+      this.lastReply = (ready?.text ?? res?.text ?? '').trim();
+      if (res) {
+        rec.usage = res.usage;
+        this.taskUsage = addUsage(this.taskUsage, res.usage);
+      }
+      emit({ type: 'step:output', stepId: step.id, kind: 'text', text: this.lastReply });
+      if (res) emit({ type: 'tokens', stepId: step.id, usage: res.usage, sessionTotal: this.sessionTotal });
+      rec.outcome = 'done';
+      emit({ type: 'step:done', stepId: step.id, at: this.now() });
+    } catch (e) {
+      if (isCancelled(e)) throw e;
+      if (e instanceof SmartError && e.kind !== 'claude') throw e;
+      emit({ type: 'step:failed', stepId: step.id, error: (e as Error).message, at: this.now() });
+    }
+    summary.steps.push(rec);
+    summary.ok = rec.outcome === 'done';
+    x.stage('verify', 'skipped');
+    x.stage('execute', summary.ok ? 'done' : 'failed');
+    // A greeting between a failed task and /resume must not throw the unfinished task away.
+    return this.finish(summary, { startedAt: x.startedAt, prompt, touched: x.touched, startTree: null, keepPending: true });
+  }
 
   private announce(): void {
     if (this.announced) return;
@@ -395,8 +524,14 @@ export class Pipeline {
     return this.warm(route({ classification, text, override: this.forced }, this.config));
   }
 
+  /** `hard` sends a lone task to Opus; the steps of a written plan keep their normal route (the plan did the thinking). */
+  private forSteps(plan: Plan, c: Classification): Classification {
+    return plan.steps.length > 1 && c.difficulty === 'hard' ? { ...c, difficulty: 'normal' } : c;
+  }
+
   private routePlan(plan: Plan, classification: Classification): Record<string, RouteDecision> {
-    return Object.fromEntries(plan.steps.map((s) => [s.id, this.routeStep(s, classification)]));
+    const c = this.forSteps(plan, classification);
+    return Object.fromEntries(plan.steps.map((s) => [s.id, this.routeStep(s, c)]));
   }
 
   private routeStep(step: PlanStep, classification: Classification): RouteDecision {
@@ -510,7 +645,8 @@ export class Pipeline {
     const emit = this.bus.emit.bind(this.bus);
     const signal = this.ctl!.signal;
     const perm = resolvePermissionMode(this.permissionMode, this.deps.uid ?? process.getuid?.());
-    const first = this.routeStep(step, classification);
+    const stepClass = this.forSteps(plan, classification);
+    const first = this.routeStep(step, stepClass);
     const rec: StepRecord = { stepId: step.id, title: step.title, model: first.model, tier: first.tier, attempts: 0, escalated: false, usage: emptyUsage(), outcome: 'failed' };
 
     let tier = first.tier;
@@ -530,6 +666,8 @@ export class Pipeline {
       rec.attempts += 1;
       rec.tier = tier;
       rec.model = decision.model;
+      const effort = pickEffort({ tier, complexity: classification.complexity, difficulty: classification.difficulty, failuresOnTier, config: this.config });
+      if (effort) decision = { ...decision, reason: `${decision.reason.replace(/ · effort \w+$/, '')} · effort ${effort}` };
       emit({ type: 'stage', stage: 'verify', status: 'pending' });
       emit({ type: 'step:start', stepId: step.id, title: step.title, route: decision, attempt: rec.attempts, at: this.now() });
       a.current('execute');
@@ -545,7 +683,7 @@ export class Pipeline {
         const res = await runStep({
           plan, step, index, total, touchedFiles: touched, failure, memory: memory || undefined, note: note || undefined, referenced: index === 0 ? a.referenced : undefined,
           session: sessionId ? { id: sessionId, resume: resuming } : undefined,
-          effort: this.config.runner.effort[tier],
+          effort,
           config: this.config, cwd: this.cwd, run: this.run, route: decision, permissionMode: perm.mode, signal,
           onOutput: (kind, text) => {
             if (kind === 'text') this.lastReply = text;
@@ -639,10 +777,13 @@ export class Pipeline {
 
   private async finish(
     summary: TaskSummary,
-    f: { startedAt: string; prompt: string; touched: string[]; startTree: string | null; aborted?: boolean; doneIds?: Set<string> },
+    f: { startedAt: string; prompt: string; touched: string[]; startTree: string | null; aborted?: boolean; doneIds?: Set<string>; keepPending?: boolean },
   ): Promise<TaskSummary> {
     const { startedAt, prompt, aborted = false } = f;
     const overhead = this.overhead;
+    // A snapshot still running in the background (early exit: direct answer, cancel) shares the temporary index with the next task: wait for it.
+    await this.bgSnapshot?.catch(() => null);
+    this.bgSnapshot = null;
     const changed = await this.summarizeChanges(summary, f.startTree, prompt);
     if (!summary.dryRun && summary.steps.some((s) => s.outcome !== 'skipped')) {
       recordTask(this.conv, {
@@ -657,10 +798,10 @@ export class Pipeline {
     }
     // A task that stopped after planning can be continued with /resume; a finished one clears that.
     if (!summary.dryRun) {
-      const unfinished = !summary.ok && summary.plan && summary.classification && summary.steps.some((x) => x.outcome !== 'skipped');
+      const unfinished = !f.keepPending && !summary.ok && summary.plan && summary.classification && summary.steps.some((x) => x.outcome !== 'skipped');
       if (unfinished) {
         this.conv.pending = { prompt, classification: summary.classification!, plan: summary.plan!, doneStepIds: [...(f.doneIds ?? [])], at: startedAt };
-      } else if (summary.ok) {
+      } else if (summary.ok && !f.keepPending) {
         delete this.conv.pending;
       }
     }
@@ -677,6 +818,8 @@ export class Pipeline {
       const err = this.deps.tracker.append(record);
       if (err) this.bus.emit({ type: 'notice', level: 'warn', message: err });
     }
+    // The task is over for callers from here on: a frontend that reacts to the terminal event below may start the next one at once.
+    this.release();
     if (!aborted) {
       this.bus.emit({ type: 'stage', stage: 'done', status: summary.ok ? 'done' : 'failed' });
       this.bus.emit({ type: 'task:done', taskId: summary.taskId, totals: summary.totals, ok: summary.ok, at: this.now() });

@@ -10,7 +10,14 @@ export function projectFiles(cwd: string, limit = 80): string[] {
     const out = execFileSync('git', ['-c', 'core.quotepath=false', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
       cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, maxBuffer: 4 * 1024 * 1024,
     });
-    return out.split('\0').filter((f) => f && existsSync(join(cwd, f))).slice(0, limit);
+    // Filter lazily and stop at `limit`: a repo with 100k files must not cost 100k stat calls, and node_modules or dist must not crowd out sources.
+    const files: string[] = [];
+    for (const f of out.split('\0')) {
+      if (files.length >= limit) break;
+      if (!f || f.split('/').some((part) => SKIP.has(part)) || !existsSync(join(cwd, f))) continue;
+      files.push(f);
+    }
+    return files;
   } catch {
     return walk(cwd, '', 3, limit);
   }

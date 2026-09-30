@@ -191,7 +191,8 @@ describe('project directory inside a repository, and paths that differ in spelli
     config.verify.auto = false;
     await new Pipeline(config, bus, sub, { run, uid: 1000, listFiles: () => [], checkpoints, projectContext: () => '' }).runTask('go');
     const ch = events.find((e): e is Extract<SmartEvent, { type: 'changes' }> => e.type === 'changes')!;
-    expect(ch.files.map((f) => f.path).sort()).toEqual(['../outside.txt', 'inside.txt']);
+    // Paths are relative to the project directory, and files changed outside it are not part of this task.
+    expect(ch.files.map((f) => f.path)).toEqual(['inside.txt']);
   });
 
   it('still works when the project path is spelled differently from the repository root (symlink; on Windows, 8.3 short names)', async () => {

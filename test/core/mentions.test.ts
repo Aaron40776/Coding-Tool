@@ -15,6 +15,13 @@ describe('extractMentions', () => {
     expect(extractMentions('@first.txt is at the start')).toEqual(['first.txt']);
     expect(extractMentions('see (@docs/readme.md)')).toEqual([]); // glued to "(" — not a mention
   });
+  it('keeps brackets that belong to the path (Next.js routes) but drops a closing one that does not', () => {
+    expect(extractMentions('open @app/[id]/page.tsx now')).toEqual(['app/[id]/page.tsx']);
+    expect(extractMentions('check @src/app/(group) please')).toEqual(['src/app/(group)']);
+    expect(extractMentions('edit @app/[id].')).toEqual(['app/[id]']);
+    expect(extractMentions('why @a.ts?')).toEqual(['a.ts']);
+    expect(extractMentions('x @dir/[slug]/a.ts, and @b.ts)')).toEqual(['dir/[slug]/a.ts', 'b.ts']);
+  });
   it('ignores email addresses and a lone @', () => {
     expect(extractMentions('mail me at a@b.com or @ nobody')).toEqual([]);
   });

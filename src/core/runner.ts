@@ -54,13 +54,29 @@ export function gatherFiles(cwd: string, files: string[], maxBytes: number): Fil
       }
       if (buf.subarray(0, 8000).includes(0)) continue; // binary
       const slice = buf.subarray(0, budget);
-      out.push({ path: slash(relative(root, resolve(cwd, f))) || f, content: slice.toString('utf8'), truncated: size > slice.length });
+      out.push({ path: slash(rel) || f, content: slice.toString('utf8'), truncated: size > slice.length });
       budget -= slice.length;
     } catch {
       continue;
     }
   }
   return out;
+}
+
+/**
+ * A project-relative path for a file Claude Code reports. It reports real paths, so when the project sits under a
+ * symlink (macOS /tmp, a junction, a Windows 8.3 name) the plain relative path starts with `../..`: compare against the real root then.
+ */
+export function projectRelative(cwd: string, file: string): string {
+  const plain = relative(cwd, resolve(cwd, file));
+  if (plain !== '' && !plain.startsWith('..')) return slash(plain);
+  try {
+    const viaReal = relative(realpathSync(cwd), resolve(cwd, file));
+    if (viaReal !== '' && !viaReal.startsWith('..') && !isAbsolute(viaReal)) return slash(viaReal);
+  } catch {
+    /* fall through */
+  }
+  return slash(plain) || file;
 }
 
 export interface StepPromptInput {
@@ -142,7 +158,7 @@ export async function runStep(o: RunStepOptions): Promise<StepRunResult> {
       // Show project-relative paths: absolute ones are long and add no information.
       const short = slash(e.summary.split(`${o.cwd}${sep}`).join('').split(`${o.cwd}/`).join(''));
       o.onOutput?.('tool', short.length > 110 ? `${short.slice(0, 107)}...` : short);
-      if (e.writtenFile) touched.add(slash(relative(o.cwd, resolve(o.cwd, e.writtenFile))) || e.writtenFile);
+      if (e.writtenFile) touched.add(projectRelative(o.cwd, e.writtenFile));
     } else if (e.kind === 'progress') o.onProgress?.(e);
   };
 

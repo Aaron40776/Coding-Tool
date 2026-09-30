@@ -6,7 +6,6 @@ import { SmartError } from './errors.js';
 
 const tier = z.enum(['haiku', 'sonnet', 'opus']);
 const effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
-const priceFor = (input: number, output: number) => z.object({ input: z.number().min(0).default(input), output: z.number().min(0).default(output) }).prefault({});
 
 const validRegex = (s: string): boolean => {
   try {
@@ -67,6 +66,10 @@ const ConfigSchema = z.object({
         .enum(['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'])
         .default('bypassPermissions'),
       bare: z.boolean().default(false),
+      /** Classify, plan and review calls have no tools, so they skip hooks, plugins and MCP servers (faster start-up). */
+      leanCalls: z.boolean().default(true),
+      /** Pick the thinking effort per step from the task (cheap for easy work, more for hard). An explicit `effort` below wins. */
+      autoEffort: z.boolean().default(true),
       extraArgs: z.array(z.string()).default([]),
       /** Optional `--effort` level per model tier, e.g. { "haiku": "low", "opus": "high" }. Unset = Claude Code default. */
       effort: z.object({ haiku: effort.optional(), sonnet: effort.optional(), opus: effort.optional() }).default({}),
@@ -82,14 +85,6 @@ const ConfigSchema = z.object({
       downshiftAt: z.number().min(0).max(1).default(0.9),
       /** Warn once when a window first reaches this share (0..1). 0 disables. */
       warnAt: z.number().min(0).max(1).default(0.8),
-    })
-    .prefault({}),
-  /** List prices in USD per million tokens, used ONLY for the savings estimate in /stats (real costs come from Claude Code). */
-  pricing: z
-    .object({
-      haiku: priceFor(1, 5),
-      sonnet: priceFor(3, 15),
-      opus: priceFor(5, 25),
     })
     .prefault({}),
   trackerPath: z.string().default('~/.smart/history.json'),
@@ -120,11 +115,15 @@ export interface LoadedConfig {
 }
 
 /** Keys the schema knows, two levels deep (every key has a default, so the default config lists them all). */
+/** Settings that used to exist: still accepted silently so old config files do not warn. */
+const REMOVED_KEYS = new Set(['pricing']);
+
 function unknownKeys(raw: unknown): string[] {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return [];
   const known = defaultConfig() as unknown as Record<string, unknown>;
   const out: string[] = [];
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (REMOVED_KEYS.has(k)) continue;
     if (!(k in known)) {
       out.push(k);
       continue;

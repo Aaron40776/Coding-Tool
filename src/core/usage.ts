@@ -27,9 +27,10 @@ export function fmtReset(resetsAt: number | undefined, nowMs: number): string {
 export const pressure = (u: number): 'ok' | 'warn' | 'high' => (u >= 0.85 ? 'high' : u >= 0.6 ? 'warn' : 'ok');
 
 /** The most constraining window (highest utilization), for warnings and routing. */
-export function tightest(limits: Limits | null): { name: string; window: LimitWindow } | null {
+export function tightest(limits: Limits | null, nowMs = Date.now()): { name: string; window: LimitWindow } | null {
   if (!limits) return null;
-  const entries = Object.entries(limits.windows);
+  // A window that has already reset says nothing about now (limits.json can be hours old).
+  const entries = Object.entries(limits.windows).filter(([, w]) => w.resetsAt === undefined || w.resetsAt * 1000 > nowMs);
   if (entries.length === 0) return null;
   const [name, window] = entries.reduce((a, b) => (b[1].utilization > a[1].utilization ? b : a));
   return { name, window };

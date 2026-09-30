@@ -98,4 +98,25 @@ describe('runPrint', () => {
     await runPrint(quietCtx.pipeline, quietCtx.bus, 'x', base, quiet.io);
     expect(text(quiet.err)).not.toContain('⏺ Write');
   });
+
+  it('json output names the failed step in `error`', async () => {
+    const ctx = makeApp({ complexity: 'small_edit', config: (c) => { c.escalation.retriesPerModel = 0; c.escalation.ladder = ['sonnet']; }, executor: async () => { throw new SmartError('claude', 'boom happened'); } });
+    const cap = io();
+    const code = await runPrint(ctx.pipeline, ctx.bus, 'fix it', { ...base, format: 'json' }, cap.io);
+    const j = JSON.parse(text(cap.out));
+    expect(code).toBe(1);
+    expect(j.ok).toBe(false);
+    expect(j.error).toMatch(/failed: .*boom happened/);
+  });
+
+  it('a resumed run reports the steps finished earlier as done, not pending', async () => {
+    let n = 0;
+    const ctx = makeApp({ complexity: 'large_build', config: (c) => { c.escalation.retriesPerModel = 0; c.escalation.ladder = ['sonnet']; }, executor: async () => { n += 1; if (n === 2) throw new SmartError('claude', 'boom'); return ok(); } });
+    const first = io();
+    expect(await runPrint(ctx.pipeline, ctx.bus, 'build it', { ...base, format: 'json' }, first.io)).toBe(1);
+    const second = io();
+    expect(await runPrint(ctx.pipeline, ctx.bus, '', { ...base, format: 'json', resume: true }, second.io)).toBe(0);
+    const j = JSON.parse(text(second.out));
+    expect(j.steps.map((s: { outcome: string }) => s.outcome)).toEqual(['done', 'done']);
+  });
 });

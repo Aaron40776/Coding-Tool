@@ -1,6 +1,9 @@
 export type ErrorKind = 'cli_missing' | 'auth' | 'cancelled' | 'parse' | 'claude' | 'config' | 'internal';
 
 export class SmartError extends Error {
+  /** Spend of a call that ended in an error (it still cost money), so budgets and totals stay honest. */
+  usage?: import('./types.js').Usage;
+
   constructor(
     public readonly kind: ErrorKind,
     message: string,

@@ -17,7 +17,7 @@ export interface StatsViewProps {
   width?: number;
 }
 
-/** Usage history: account limits, time windows, per-model spend, escalations, estimated savings, priciest tasks. */
+/** Usage history: account limits, time windows, per-model spend, escalations, priciest tasks. */
 export function StatsView({ summary: s, limits, nowMs = Date.now(), path, height, width }: StatsViewProps) {
   const barW = 12;
   const modelTotal = s.byModel.reduce((n, m) => n + m.cost, 0) + s.overhead;
@@ -55,18 +55,6 @@ export function StatsView({ summary: s, limits, nowMs = Date.now(), path, height
             <Text dimColor wrap="truncate-end">{`  classify · plan · review ${money(s.overhead).padStart(24)}  ${bar(modelTotal ? s.overhead / modelTotal : 0, 8)}`}</Text>
             <Text wrap="truncate-end">{`  Escalated ${s.escalatedSteps} of ${plural(s.steps, 'step')} (${s.steps ? Math.round((s.escalatedSteps / s.steps) * 100) : 0}%)`}</Text>
           </Box>
-          {s.savings.some((x) => x.baseline > 0) ? (
-            <Box flexDirection="column" marginTop={1}>
-              <Text bold>Estimated savings <Text dimColor>(list prices in your config; a stronger model might use different tokens)</Text></Text>
-              {s.savings.filter((x) => x.baseline > 0).map((x) => (
-                <Text key={x.vs} wrap="truncate-end">
-                  {`  vs all-${x.vs}`.padEnd(16)}
-                  <Text color={x.saved >= 0 ? 'green' : 'red'}>{`${x.saved >= 0 ? '≈ saved' : '≈ extra'} ${money(x.saved)} (${Math.round(Math.abs(x.share) * 100)}%)`}</Text>
-                  <Text dimColor>{`   would be ≈ ${money(x.baseline)}`}</Text>
-                </Text>
-              ))}
-            </Box>
-          ) : null}
           {s.top.length > 0 ? (
             <Box flexDirection="column" marginTop={1}>
               <Text bold>Most expensive</Text>

@@ -57,6 +57,7 @@ export function PlanApproval({ plan, routes, onApprove, onCancel, height = 24, w
     set((s) => ({ ...s, steps: s.steps.map((st, j) => (j === i ? { ...st, ...p } : st)) }));
   const move = (cursor: number) => set((s) => ({ ...s, cursor, dscroll: 0 }));
   const uid = useRef(0);
+  const maxScroll = useRef(0);
   const swap = (i: number, j: number) =>
     set((s) => {
       if (j < 0 || j >= s.steps.length) return s;
@@ -75,6 +76,11 @@ export function PlanApproval({ plan, routes, onApprove, onCancel, height = 24, w
         set((s) => ({ ...s, edit: { ...edit, buffer } }));
       } else if (key.return) {
         const text = edit.buffer.trim();
+        if (edit.fresh && edit.field === 'title' && !text) {
+          // A new step needs a name: an empty one cancels it, like Esc.
+          set((s) => ({ ...s, steps: s.steps.filter((_, j) => j !== cursor), cursor: Math.max(0, cursor - 1), edit: null }));
+          return;
+        }
         // A step added with `a` must not end up without instructions: fall back to its title.
         if (text) patch(cursor, { [edit.field]: text });
         else if (edit.fresh && edit.field === 'instructions') patch(cursor, { instructions: get().steps[cursor]?.title ?? '' });
@@ -100,7 +106,7 @@ export function PlanApproval({ plan, routes, onApprove, onCancel, height = 24, w
     const step = steps[cursor];
     if (key.upArrow) move(Math.max(0, cursor - 1));
     else if (key.downArrow) move(Math.min(steps.length - 1, cursor + 1));
-    else if (key.pageDown) set((s) => ({ ...s, dscroll: s.dscroll + 4 }));
+    else if (key.pageDown) set((s) => ({ ...s, dscroll: Math.min(maxScroll.current, s.dscroll + 4) }));
     else if (key.pageUp) set((s) => ({ ...s, dscroll: Math.max(0, s.dscroll - 4) }));
     else if (input === ' ' && step) {
       patch(cursor, { skipped: !step.skipped });
@@ -160,7 +166,8 @@ export function PlanApproval({ plan, routes, onApprove, onCancel, height = 24, w
   }
   const editing = Boolean(edit);
   // While editing show the END of the buffer (where the cursor is); otherwise the scrolled window.
-  const start = editing ? Math.max(0, content.length - detail) : Math.min(dscroll, Math.max(0, content.length - detail));
+  maxScroll.current = Math.max(0, content.length - detail); // PgDn stops here, so PgUp always responds at once
+  const start = editing ? Math.max(0, content.length - detail) : Math.min(dscroll, maxScroll.current);
   let shown = content.slice(start, start + detail);
   const hiddenBelow = content.length - (start + shown.length);
   if (hiddenBelow > 0 && shown.length > 0) shown = [...shown.slice(0, -1), { text: `… ${hiddenBelow + 1} more lines (PgDn)`, style: 'dim' as const }];
