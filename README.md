@@ -38,7 +38,7 @@ smart init                         # write a starter smart.config.json (--global
 ```
 
 In the app: `Enter` sends, `Esc` cancels, `Tab` switches panel, `@path` adds a file (Tab completes), `\`+`Enter` starts a new line, `↑` recalls earlier prompts.
-In Windows Terminal the tab and taskbar button show progress: steps done, yellow while a plan waits for you, red if a task failed.
+Replies appear as they are written. In Windows Terminal the tab and taskbar button show progress: steps done, yellow while a plan waits for you, red if a task failed.
 While a task runs you can type the next one: `Enter` queues it and it starts when the current task completes (`/usage`, `/cost`, `/diff` work meanwhile).
 
 | Command | |

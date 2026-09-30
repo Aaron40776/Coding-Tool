@@ -116,7 +116,8 @@ export class GitCheckpoints implements Checkpointer {
     }
     const env = { GIT_INDEX_FILE: this.cacheIndex };
     // Only the project directory: a monorepo sibling the user edits elsewhere must not show up in (or be restored by) /undo.
-    const add = await git(['add', '-A', '--', this.prefix || '.'], { cwd: this.root, env });
+    // The untracked-file cache lives in our private index: later snapshots skip re-scanning unchanged folders.
+    const add = await git(['-c', 'core.untrackedCache=true', 'add', '-A', '--', this.prefix || '.'], { cwd: this.root, env });
     if (add.code !== 0) return null;
     const tree = await git(['write-tree'], { cwd: this.root, env });
     return tree.code === 0 && /^[0-9a-f]{40,64}$/.test(tree.stdout.trim()) ? tree.stdout.trim() : null;

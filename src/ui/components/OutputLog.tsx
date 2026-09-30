@@ -60,14 +60,24 @@ export function wrapText(text: string, width: number): string[] {
   return out;
 }
 
+/** Wrapped rows per line object and width: lines never change in place, so streaming re-wraps only the line that grows. */
+const rowCache = new WeakMap<OutputLine, { width: number; rows: Row[] }>();
+
 export function toRows(lines: OutputLine[], width = 0): Row[] {
   return lines.flatMap((l) => {
-    // Tool lines stay on one row (paths); everything else is wrapped so reasons and errors stay readable.
-    const wrapped = l.kind === 'tool' || l.kind.startsWith('diff') || width === 0 ? l.text.split('\n') : l.text.split('\n').flatMap((p) => wrapText(p, width));
-    const parts = wrapped;
-    const shown = CAPPED.has(l.kind) && parts.length > MAX_LINES_PER_ENTRY ? [...parts.slice(0, MAX_LINES_PER_ENTRY), `… ${parts.length - MAX_LINES_PER_ENTRY} more lines`] : parts;
-    return shown.map((text, i) => ({ key: `${l.id}:${i}`, kind: l.kind, text, first: i === 0 }));
+    const hit = rowCache.get(l);
+    if (hit && hit.width === width) return hit.rows;
+    const rows = lineRows(l, width);
+    rowCache.set(l, { width, rows });
+    return rows;
   });
+}
+
+function lineRows(l: OutputLine, width: number): Row[] {
+  // Tool lines stay on one row (paths); everything else is wrapped so reasons and errors stay readable.
+  const parts = l.kind === 'tool' || l.kind.startsWith('diff') || width === 0 ? l.text.split('\n') : l.text.split('\n').flatMap((p) => wrapText(p, width));
+  const shown = CAPPED.has(l.kind) && parts.length > MAX_LINES_PER_ENTRY ? [...parts.slice(0, MAX_LINES_PER_ENTRY), `… ${parts.length - MAX_LINES_PER_ENTRY} more lines`] : parts;
+  return shown.map((text, i) => ({ key: `${l.id}:${i}`, kind: l.kind, text, first: i === 0 }));
 }
 
 function RowView({ row }: { row: Row }) {
