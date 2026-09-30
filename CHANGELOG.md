@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-09-30)
+
+- **Install and update in one command**: `irm https://raw.githubusercontent.com/Aaron40776/Smart/main/install.ps1 | iex` checks Git, Node.js 22+ and Claude Code, then clones, builds and links smart; `smart update` pulls, installs and rebuilds. CI parses the installer with Windows PowerShell 5.1 and runs it.
+- **Progress on the taskbar**: in Windows Terminal the tab and taskbar button show how far a task is, turn yellow while a plan waits for your approval and red when a task failed.
+- Fix (Windows): a folder spelled with different capitals (`C:\Users\Me\app` vs `c:\users\me\app`) no longer loses its conversation, `/resume` task and `/undo` history. Entries saved under another spelling are still found.
 
 - **Windows 10/11 only**: CI runs on Windows (Node 22 and 24) and the docs are written for PowerShell. The README's install commands no longer use `&&`, which Windows PowerShell 5.1 (the default on Windows 10/11) rejects.
 

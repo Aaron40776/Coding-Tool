@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import type { Classification, Complexity, ModelTier, Plan } from '../types.js';
 import { quarantineCorrupt, withFileLock, writeFileAtomic } from './atomicFile.js';
@@ -106,9 +107,27 @@ interface StoreFile {
   byDir: Record<string, Conversation & { updatedAt: string }>;
 }
 
+/**
+ * The key a project directory is stored under. Windows paths are case-insensitive: `C:\Users\Me\app` and `c:\users\me\app`
+ * (as a shell may report it on another day) are the same folder and must find the same conversation.
+ */
+export function dirKey(cwd: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'win32') return cwd.length > 1 ? cwd.replace(/\/+$/, '') : cwd;
+  return path.win32.resolve(cwd).replace(/[\\/]+$/, '').toLowerCase();
+}
+
 /** Remembers the last conversation per project directory so `smart -c` can continue it. */
 export class ConversationStore {
-  constructor(private readonly path: string) {}
+  constructor(
+    private readonly path: string,
+    private readonly platform: NodeJS.Platform = process.platform,
+  ) {}
+
+  /** The entry for `cwd`: under its key, or (older files) under any spelling of the same folder, the most recent first. */
+  private find(byDir: StoreFile['byDir'], cwd: string): StoreFile['byDir'][string] | undefined {
+    const key = dirKey(cwd, this.platform);
+    return byDir[key] ?? Object.entries(byDir).filter(([k]) => dirKey(k, this.platform) === key).sort((a, b) => b[1].updatedAt.localeCompare(a[1].updatedAt))[0]?.[1];
+  }
 
   private read(): StoreFile {
     if (!existsSync(this.path)) return { version: 1, byDir: {} };
@@ -122,7 +141,7 @@ export class ConversationStore {
   }
 
   load(cwd: string): Conversation | null {
-    const c = this.read().byDir[cwd];
+    const c = this.find(this.read().byDir, cwd);
     if (!c || !Array.isArray(c.tasks)) return null;
     return { id: c.id, sessionId: c.sessionId ?? null, lastTier: c.lastTier, lastCallAt: c.lastCallAt, lastCallAtByTier: c.lastCallAtByTier, tasks: c.tasks, pending: validPending(c.pending), undo: validUndo(c.undo), ...(typeof c.contextTokens === 'number' ? { contextTokens: c.contextTokens } : {}) };
   }
@@ -132,7 +151,10 @@ export class ConversationStore {
     try {
       withFileLock(this.path, () => {
         const file = this.read();
-        file.byDir[cwd] = { ...conv, updatedAt: now.toISOString() };
+        const key = dirKey(cwd, this.platform);
+        // One entry per folder: other spellings of it (from before keys were normalised) are replaced.
+        for (const k of Object.keys(file.byDir)) if (dirKey(k, this.platform) === key) delete file.byDir[k];
+        file.byDir[key] = { ...conv, updatedAt: now.toISOString() };
         // Keep the file small: only the 50 most recently used directories.
         const keep = Object.entries(file.byDir).sort((a, b) => b[1].updatedAt.localeCompare(a[1].updatedAt)).slice(0, 50);
         file.byDir = Object.fromEntries(keep);

@@ -18,6 +18,7 @@ import { PipelineBar } from './components/PipelineBar.js';
 import { PlanApproval } from './components/PlanApproval.js';
 import { PlanChecklist } from './components/PlanChecklist.js';
 import { StatsView } from './components/StatsView.js';
+import { CLEAR_PROGRESS, progressFor, progressSequence } from './progress.js';
 import { initialState, reduce, taskUsage } from './state.js';
 import { ACCENT } from './theme.js';
 
@@ -54,6 +55,8 @@ export interface AppProps {
   startupNotices?: string[];
   /** One-shot mode: exit when the task finishes. */
   oneShot?: boolean;
+  /** Where to send terminal control sequences (taskbar progress). Omit to send none. */
+  terminal?: { write: (s: string) => void };
   onExit?: (ok: boolean) => void;
 }
 
@@ -64,7 +67,7 @@ const clipPrompt = (p: string): string => {
 
 const WELCOME = ['Claude Code, routed to the cheapest capable model.', 'Type a task and press Enter, e.g. "make me a snake game".', '/help lists commands.'];
 
-export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial, startupNotices, inputHistory, oneShot, onExit }: AppProps) {
+export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial, startupNotices, inputHistory, oneShot, onExit, terminal }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [size, setSize] = useState({ cols: stdout.columns ?? 100, rows: stdout.rows ?? 30 });
@@ -143,6 +146,16 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
     if (state.ok) startTask(queued);
     else dispatch({ type: 'notice', level: 'warn', message: `The queued task was not started because this one did not complete: "${clipPrompt(queued)}". Press ↑ to send it again.` });
   }, [state.phase]);
+
+  // Taskbar and tab progress, sent only when it changes; cleared when smart closes.
+  const progress = progressSequence(progressFor(state));
+  // Braces matter: an effect must not return write()'s result (React would call it as the cleanup).
+  useEffect(() => {
+    terminal?.write(progress);
+  }, [terminal, progress]);
+  useEffect(() => () => {
+    terminal?.write(CLEAR_PROGRESS);
+  }, [terminal]);
 
   const steps = state.plan?.steps.length ?? 0;
   const busy = state.phase === 'running' || state.phase === 'approval';

@@ -20,6 +20,7 @@ src/core/     the engine, no UI imports: pipeline (orchestrator), classifier, pl
 src/core/store/   files under %USERPROFILE%\.smart: tracker (history), conversation, inputHistory, limits, atomicFile (lock + atomic write)
 src/ui/       Ink components and the state reducer; src/cli.tsx and src/print.ts are the entry points
 test/         mirrors src; test/fixtures/fake-claude.mjs stands in for the CLI
+install.ps1   the Windows installer (CI parses it with Windows PowerShell 5.1 and runs it)
 ```
 
 ## Ground rules
