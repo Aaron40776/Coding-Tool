@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- If keeping Claude Code running between steps does not work on your machine, smart now says so once on screen (and that `runner.keepAlive: false` skips the attempt) instead of only in the debug log.
+- `npm audit` is clean again: esbuild (used only to build smart) is pinned to 0.28.2 through an npm override; the advisory concerned esbuild's development server, which smart never runs.
+
 ## 0.3.1 (2026-09-30)
 
 - Fix (Windows): a follow-up task whose effort differed from the previous one could wait about a minute. smart replaced the kept-alive `claude` process and started the new one on the same session at once, while the old one was still being ended, and a second forced `taskkill /T` two seconds later could hit a reused process id. The old process is now waited for (up to 3 s) before its session is resumed, and the forced kill is only sent while it is still running. Found in the first real Windows run.

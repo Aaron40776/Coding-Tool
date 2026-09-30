@@ -159,4 +159,15 @@ describe('kept-alive claude process', () => {
     expect(lines.find((l) => l.keepAlive === 'given up')?.reason).toMatch(/did not answer within/);
     expect(lines.some((l) => l.keepAlive === 'off for this run')).toBe(true);
   });
+
+  it('says once on screen when keeping the process alive does not work', async () => {
+    vi.stubEnv('FAKE_SILENT', '1');
+    const notices: string[] = [];
+    const run = createClaudeRunner({ keepAlive: true, command, oneShot: vi.fn<RunClaudeFn>(async () => ({ isError: false, subtype: 'success', text: 'one-shot', structured: undefined, usage: emptyUsage(), sessionId: 's', numTurns: 1 })), firstOutputMs: 300, onNotice: (m) => notices.push(m) });
+    runners.push(run);
+    await run(step());
+    await run(step({ session: { id: 'sess-1', resume: true } }));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatch(/did not answer within 0 s.*runner\.keepAlive: false/);
+  });
 });
