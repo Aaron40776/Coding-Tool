@@ -1,0 +1,22 @@
+[
+  { "text": "what's the difference between let and const?", "classification": { "complexity": "trivial", "difficulty": "easy" }, "want": [0, 0] },
+  { "text": "how does the reducer in state.ts handle the cancel event?", "classification": { "complexity": "trivial", "difficulty": "normal" }, "want": [0, 1] },
+  { "text": "update the copyright year in the footer to 2026", "classification": { "complexity": "small_edit", "difficulty": "easy" }, "want": [1, 1] },
+  { "text": "add a log line when the server starts", "classification": { "complexity": "small_edit", "difficulty": "easy" }, "want": [1, 1] },
+  { "text": "fix the off-by-one error in the pagination helper", "classification": { "complexity": "small_edit", "difficulty": "normal" }, "want": [1, 3] },
+  { "text": "add an endpoint DELETE /users/:id with a test", "classification": { "complexity": "small_edit", "difficulty": "normal" }, "want": [1, 3] },
+  { "text": "add a settings page with a form for name and email, save it to the API, show validation errors, and add tests", "classification": { "complexity": "multi_file", "difficulty": "normal" }, "want": [2, 3] },
+  { "text": "convert the callbacks in the file loader to async/await and update all callers", "classification": { "complexity": "multi_file", "difficulty": "normal" }, "want": [2, 3] },
+  { "text": "build a command-line tool that watches a folder and converts new PNGs to WebP", "classification": { "complexity": "large_build", "difficulty": "normal" }, "want": [2, 3] },
+  { "text": "make a flashcard app with decks, spaced repetition and import from CSV", "classification": { "complexity": "large_build", "difficulty": "normal" }, "want": [2, 4] },
+  { "text": "there's a race condition between the cache refresh and the request handler, requests sometimes read half-updated data", "classification": { "complexity": "multi_file", "difficulty": "hard" }, "want": [4, 6] },
+  { "text": "implement a thread-safe LRU cache with per-key expiry and write tests for the concurrent cases", "classification": { "complexity": "multi_file", "difficulty": "hard" }, "want": [4, 6] },
+  { "text": "audit the file upload code for security problems (path traversal, content-type spoofing) and fix them", "classification": { "complexity": "multi_file", "difficulty": "hard" }, "want": [4, 6] },
+  { "text": "the build got slow after the last release, profile it and find out what regressed", "classification": { "complexity": "multi_file", "difficulty": "normal" }, "want": [3, 5] },
+  { "text": "design a plugin architecture for the exporter so third parties can add formats, and port the existing exporters to it", "classification": { "complexity": "large_build", "difficulty": "hard" }, "want": [5, 6] },
+  { "text": "rename the config key timeout to timeoutMs everywhere and update the docs", "classification": { "complexity": "multi_file", "difficulty": "easy" }, "want": [1, 3] },
+  { "text": "why is this returning undefined only on the second call?", "classification": { "complexity": "trivial", "difficulty": "normal" }, "want": [0, 3] },
+  { "text": "write a README section explaining how to install and run the project", "classification": { "complexity": "small_edit", "difficulty": "easy" }, "want": [1, 2] },
+  { "text": "add a dropdown to choose the language and wire it to the i18n provider", "classification": { "complexity": "multi_file", "difficulty": "normal" }, "want": [2, 3] },
+  { "text": "the deploy script sometimes fails randomly on CI with a timeout, can't reproduce locally, find out why", "classification": { "complexity": "multi_file", "difficulty": "hard" }, "want": [4, 6] }
+]

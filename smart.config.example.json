@@ -1,6 +1,7 @@
 {
   "models": { "haiku": "haiku", "sonnet": "sonnet", "opus": "opus" },
   "routing": {
+    "optimize": "balanced",
     "trivial": "haiku",
     "small_edit": "sonnet",
     "multi_file": "sonnet",

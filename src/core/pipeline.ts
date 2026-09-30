@@ -11,7 +11,9 @@ import { SmartError, cancelled, isCancelled } from './errors.js';
 import { projectContext, projectFiles } from './files.js';
 import { resolveMentions } from './mentions.js';
 import { describeConfig } from './describe.js';
-import { pickEffort, planEffort } from './effort.js';
+import { effortFor, planEffort } from './effort.js';
+import { buildHistory, type History } from './rating/learn.js';
+import { rateTask } from './rating/rate.js';
 import { CHAT_SYSTEM, isSmallTalk } from './smalltalk.js';
 import { makePlan, singleStepPlan } from './planner.js';
 import { applyWarmCache, plannerTier, route } from './router.js';
@@ -87,6 +89,8 @@ export class Pipeline {
   private limits: Limits | null;
   private warnedWindows = new Set<string>();
   private leanOk = true;
+  /** How each rung has fared on your recent steps; the rater nudges towards what worked. Refreshed at the start of every task. */
+  private history: History | undefined;
   /** The task currently running, so a shutdown can wait for its state to be saved (see `settle`). */
   private current: Promise<unknown> | null = null;
   private bgSnapshot: Promise<string | null> | null = null;
@@ -219,6 +223,7 @@ export class Pipeline {
 
   private async execute(prompt: string, opts: TaskOptions): Promise<TaskSummary> {
     const myId = ++this.runId;
+    this.history = this.loadHistory();
     this.releaseRun = () => {
       if (this.runId !== myId) return;
       this.running = false;
@@ -287,7 +292,7 @@ export class Pipeline {
         this.addCallUsage(c.usage);
         classification = c.classification;
         summary.classification = classification;
-        emit({ type: 'classified', classification, route: this.routeTask(classification, prompt) });
+        emit({ type: 'classified', classification, route: this.routeTask(classification, prompt, referenced.map((f) => f.path)) });
         if (classification.fallback) emit({ type: 'notice', level: 'warn', message: classification.reason });
         stage('classify', 'done');
 
@@ -297,11 +302,12 @@ export class Pipeline {
         }
 
         // 2. plan
+        const taskScore = rateTask({ text: prompt, classification, files: referenced.map((f) => f.path), config: this.config, history: this.history }).score;
         const wantPlan = !opts.noPlan && (classification.needsPlan || classification.complexity === 'large_build');
         if (wantPlan) {
           at('plan');
           const p = await makePlan(prompt, classification, {
-            config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(classification), memory, effort: planEffort(classification.complexity, this.config),
+            config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(classification, taskScore), memory, effort: planEffort(classification.complexity, this.config, taskScore), score: taskScore,
             projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd), referenced,
           });
           this.addCallUsage(p.usage);
@@ -470,8 +476,8 @@ export class Pipeline {
   }
 
   /** While an account usage window is nearly used up, plan with sonnet instead of the (heavier) configured planner model. */
-  private plannerDownshift(classification: Classification): ModelTier | null {
-    const tier = plannerTier(classification, this.config);
+  private plannerDownshift(classification: Classification, score: number): ModelTier | null {
+    const tier = plannerTier(classification, this.config, score);
     const probe = applyLimitPressure({ tier, model: this.config.models[tier], reason: 'planner', source: 'complexity' }, this.limits, this.config);
     return probe.tier !== tier ? probe.tier : null;
   }
@@ -508,22 +514,27 @@ export class Pipeline {
     if (err) this.bus.emit({ type: 'notice', level: 'warn', message: err });
   }
 
-  private routeTask(classification: Classification, text: string): RouteDecision {
-    return this.warm(route({ classification, text, override: this.forced }, this.config));
+  private loadHistory(): History | undefined {
+    try {
+      return this.deps.tracker ? buildHistory(this.deps.tracker.load()) : undefined;
+    } catch {
+      return undefined; // learning is a bonus: never let it stop a task
+    }
   }
 
-  /** `hard` sends a lone task to Opus; the steps of a written plan keep their normal route (the plan did the thinking). */
-  private forSteps(plan: Plan, c: Classification): Classification {
-    return plan.steps.length > 1 && c.difficulty === 'hard' ? { ...c, difficulty: 'normal' } : c;
+  private routeTask(classification: Classification, text: string, files?: string[]): RouteDecision {
+    return this.warm(route({ classification, text, override: this.forced, files, history: this.history }, this.config));
   }
 
   private routePlan(plan: Plan, classification: Classification): Record<string, RouteDecision> {
-    const c = this.forSteps(plan, classification);
-    return Object.fromEntries(plan.steps.map((s) => [s.id, this.routeStep(s, c)]));
+    return Object.fromEntries(plan.steps.map((s) => [s.id, this.routeStep(s, classification, plan.steps.length > 1)]));
   }
 
-  private routeStep(step: PlanStep, classification: Classification): RouteDecision {
-    return this.warm(route({ classification, text: `${step.title}\n${step.instructions}`, step, override: this.forced }, this.config));
+  /** A step of a written plan is rated on its own text and the planner's difficulty; a lone task on the request itself. */
+  private routeStep(step: PlanStep, classification: Classification, inPlan = true): RouteDecision {
+    // A lone task is rated on the user's own words (its step title is boilerplate and would hide a leading question word).
+    const text = inPlan ? `${step.title}\n${step.instructions}` : step.instructions;
+    return this.warm(route({ classification, text, step, solo: !inPlan, override: this.forced, history: this.history }, this.config));
   }
 
   private awaitApproval(): Promise<Plan> {
@@ -633,9 +644,12 @@ export class Pipeline {
     const emit = this.bus.emit.bind(this.bus);
     const signal = this.ctl!.signal;
     const perm = resolvePermissionMode(this.permissionMode, this.deps.uid ?? process.getuid?.());
-    const stepClass = this.forSteps(plan, classification);
-    const first = this.routeStep(step, stepClass);
-    const rec: StepRecord = { stepId: step.id, title: step.title, model: first.model, tier: first.tier, attempts: 0, escalated: false, usage: emptyUsage(), outcome: 'failed' };
+    const first = this.routeStep(step, classification, plan.steps.length > 1);
+    const startEffort = effortFor({ decision: first, tier: first.tier, failuresOnTier: 0, escalated: false, config: this.config });
+    const rec: StepRecord = {
+      stepId: step.id, title: step.title, model: first.model, tier: first.tier, attempts: 0, escalated: false, usage: emptyUsage(), outcome: 'failed',
+      ...(first.score !== undefined ? { rated: { tier: first.tier, ...(startEffort ? { effort: startEffort } : {}), score: first.score } } : {}),
+    };
 
     let tier = first.tier;
     let failuresOnTier = 0;
@@ -654,8 +668,9 @@ export class Pipeline {
       rec.attempts += 1;
       rec.tier = tier;
       rec.model = decision.model;
-      const effort = pickEffort({ tier, complexity: classification.complexity, difficulty: classification.difficulty, failuresOnTier, config: this.config });
-      if (effort) decision = { ...decision, reason: `${decision.reason.replace(/ · effort \w+$/, '')} · effort ${effort}` };
+      const effort = effortFor({ decision, tier, failuresOnTier, escalated: rec.escalated, config: this.config });
+      // The reason already names the rated effort; say so again only when a retry, an escalation or a pinned setting changed it.
+      if (effort !== decision.effort) decision = { ...decision, effort, reason: `${decision.reason.replace(/ · effort \w+$/, '')}${effort ? ` · effort ${effort}` : ''}` };
       emit({ type: 'stage', stage: 'verify', status: 'pending' });
       emit({ type: 'step:start', stepId: step.id, title: step.title, route: decision, attempt: rec.attempts, at: this.now() });
       a.current('execute');
@@ -759,7 +774,7 @@ export class Pipeline {
         emit({ type: 'step:escalate', stepId: step.id, from: next.from, to: next.tier, reason: `failed ${failuresOnTier}x on ${next.from}` });
         tier = next.tier;
         failuresOnTier = 0;
-        decision = { tier, model: this.config.models[tier], reason: `escalated from ${next.from}` };
+        decision = { ...decision, tier, model: this.config.models[tier], reason: `escalated from ${next.from}`, source: undefined };
       }
     }
   }

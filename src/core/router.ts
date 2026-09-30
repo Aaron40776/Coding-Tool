@@ -1,5 +1,7 @@
 import type { SmartConfig } from './config.js';
-import type { Classification, ModelTier, PlanStep, RouteDecision } from './types.js';
+import { effortAt, rateTask, type StepInfo } from './rating/rate.js';
+import type { History } from './rating/learn.js';
+import type { Classification, ModelTier, RouteDecision } from './types.js';
 
 export const modelFor = (tier: ModelTier, config: SmartConfig): string => config.models[tier];
 
@@ -25,36 +27,55 @@ function keywordTier(text: string, config: SmartConfig): { tier: ModelTier; matc
 }
 
 /**
- * Pure routing function. Precedence: forced override > tier chosen for the step >
- * keyword rule > classifier-fallback (sonnet) > complexity map.
+ * Pure routing function. Precedence: forced override > tier chosen for the step > keyword rule > the rater.
+ * The rater (rating/rate.ts) scores the work and picks the cheapest model and effort that fits the score, never below the
+ * per-complexity tier in the config. The first three decide the model only; effort still follows the score.
  */
 export function route(
-  args: { classification: Classification; text: string; step?: Pick<PlanStep, 'tier'>; override?: ModelTier | null },
+  args: {
+    classification: Classification;
+    text: string;
+    step?: StepInfo;
+    /** The step is the whole request (no written plan): rate it as the request, not as one step of many. */
+    solo?: boolean;
+    override?: ModelTier | null;
+    /** Files the request refers to (@mentions). */
+    files?: string[];
+    history?: History;
+  },
   config: SmartConfig,
 ): RouteDecision {
   const { classification, text, step, override } = args;
-  if (override) return decision(override, config, `forced to ${override}`, 'override');
-  if (step?.tier) return decision(step.tier, config, `${step.tier} chosen for this step`, 'step');
+  const rating = rateTask({ text, classification, step: args.solo ? undefined : step, files: args.files, config, history: args.history });
+  const withRating = (d: RouteDecision): RouteDecision => ({
+    ...d,
+    score: rating.score,
+    confidence: rating.confidence,
+    ratedTier: d.tier,
+    effort: d.tier === rating.rung.tier ? rating.rung.effort : effortAt(d.tier, rating.score),
+  });
+  if (override) return withRating(decision(override, config, `forced to ${override}`, 'override'));
+  if (step?.tier) return withRating(decision(step.tier, config, `${step.tier} chosen for this step`, 'step'));
   const kw = keywordTier(text, config);
-  if (kw) return decision(kw.tier, config, `keyword "${kw.match}" → ${kw.tier}`, 'keyword');
-  // Unusable classifier output always lands on Sonnet, whatever the complexity map says.
-  if (classification.fallback) return decision('sonnet', config, 'classifier output unusable → sonnet', 'fallback');
-  // A task that needs deep reasoning goes to the strongest model (a step of a written plan does not: the plan already did the thinking).
-  if (classification.difficulty === 'hard' && classification.complexity !== 'trivial') return decision('opus', config, `hard ${classification.complexity} → opus`, 'complexity');
-  const tier = config.routing[classification.complexity];
-  return decision(tier, config, `${classification.complexity} → ${tier}`, 'complexity');
+  if (kw) return withRating(decision(kw.tier, config, `keyword "${kw.match}" → ${kw.tier}`, 'keyword'));
+  // Unusable classifier output: the local signals still rate the work (a deadlock hunt is not a typo fix); Sonnet is the floor.
+  if (classification.fallback) return withRating(decision(rating.rung.tier, config, `classifier output unusable, ${rating.summary}`, 'fallback'));
+  return withRating(decision(rating.rung.tier, config, rating.summary, 'complexity'));
 }
 
+/** A task rated this hard is planned by the strong planner even when it is not a big build. */
+export const HEAVY_PLAN_SCORE = 0.62;
+
 /** Which planner a task gets: the strong one for big builds and hard tasks, the light one for the rest. */
-export function plannerTier(classification: Pick<Classification, 'complexity' | 'difficulty'> | undefined, config: SmartConfig): ModelTier {
-  const heavy = !classification || classification.complexity === 'large_build' || classification.difficulty === 'hard';
+export function plannerTier(classification: Pick<Classification, 'complexity' | 'difficulty'> | undefined, config: SmartConfig, score?: number): ModelTier {
+  const heavy = !classification || classification.complexity === 'large_build' || classification.difficulty === 'hard' || (score !== undefined && score >= HEAVY_PLAN_SCORE);
   return heavy ? config.routing.planner : config.routing.plannerLight;
 }
 
 /** Route for the fixed roles that are not driven by task complexity (the planner also looks at how big and hard the task is). */
-export function routeRole(role: 'planner' | 'classifier' | 'reviewer', config: SmartConfig, override?: ModelTier | null, classification?: Classification): RouteDecision {
+export function routeRole(role: 'planner' | 'classifier' | 'reviewer', config: SmartConfig, override?: ModelTier | null, classification?: Classification, score?: number): RouteDecision {
   if (override && role === 'planner') return decision(override, config, `forced to ${override}`);
-  const tier = role === 'planner' ? plannerTier(classification, config) : config.routing[role];
+  const tier = role === 'planner' ? plannerTier(classification, config, score) : config.routing[role];
   return decision(tier, config, `${role} role → ${tier}`);
 }
 
@@ -94,6 +115,7 @@ export function applyWarmCache(decision: RouteDecision, session: WarmSession | n
   const target = session.lastCallAtByTier?.[decision.tier];
   if (target !== undefined && nowMs - target <= ttl) return decision; // the cheaper model is warm as well
   return {
+    ...decision,
     tier: session.lastTier,
     model: modelFor(session.lastTier, config),
     reason: `${decision.reason}; kept ${session.lastTier}: its cache holds this conversation, switching down would cost more`,

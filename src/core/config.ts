@@ -23,13 +23,18 @@ const ConfigSchema = z.object({
     .prefault({}),
   routing: z
     .object({
+      /**
+       * How the rater trades cost against quality: `cost` needs stronger evidence before it uses a bigger model or higher effort,
+       * `quality` needs less. The per-complexity tiers below are floors the rater never goes under.
+       */
+      optimize: z.enum(['cost', 'balanced', 'quality']).default('balanced'),
       trivial: tier.default('haiku'),
       small_edit: tier.default('sonnet'),
       multi_file: tier.default('sonnet'),
       large_build: tier.default('sonnet'),
       /** Plans big builds and hard tasks. */
       planner: tier.default('opus'),
-      /** Plans everything else that needs a plan (mid-size, multi-part changes): Sonnet is plenty and about 5x cheaper. */
+      /** Plans everything else that needs a plan (mid-size, multi-part changes): Sonnet is plenty and about 2x cheaper. */
       plannerLight: tier.default('sonnet'),
       classifier: tier.default('haiku'),
       reviewer: tier.default('haiku'),
