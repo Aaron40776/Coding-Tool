@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { Command, InvalidArgumentError } from 'commander';
 import { render } from 'ink';
 import pkg from '../package.json' with { type: 'json' };
-import { resolveClaudeCommand, runClaude } from './core/claude.js';
+import { resolveClaudeCommand } from './core/claude.js';
+import { createClaudeRunner } from './core/claudeProcess.js';
 import { expandHome, globalConfigPath, loadConfig } from './core/config.js';
 import { EventBus } from './core/events.js';
 import { SmartError } from './core/errors.js';
@@ -154,7 +155,10 @@ async function main() {
   const checkpoints = await createCheckpoints(cwd);
   process.on('exit', () => checkpoints.dispose());
   const limitsStore = new LimitsStore(expandHome(config.limitsPath));
-  const pipeline = new Pipeline(config, bus, cwd, { run: runClaude, tracker, conversation, conversationStore, checkpoints, limits: limitsStore.load(), limitsStore });
+  // Coding steps reuse one running `claude` per conversation (runner.keepAlive); it is ended when smart exits.
+  const run = createClaudeRunner({ keepAlive: config.runner.keepAlive });
+  process.on('exit', () => run.dispose());
+  const pipeline = new Pipeline(config, bus, cwd, { run, tracker, conversation, conversationStore, checkpoints, limits: limitsStore.load(), limitsStore });
 
   if (opts.print) {
     let prompt = task;

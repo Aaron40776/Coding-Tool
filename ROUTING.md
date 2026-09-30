@@ -125,7 +125,12 @@ Each coding call is given what is left of the task budget as its own limit, and 
 
 **Effort**: chosen per step by the rater (see above; `runner.autoEffort`, on by default). Pin a level per model with `"runner": { "effort": { "haiku": "low", "opus": "high" } }` (levels: low, medium, high, xhigh, max); a pinned level always wins. `"autoEffort": false` leaves Claude Code's default. The Opus planner runs at `high` for big or hard-looking requests and `medium` otherwise.
 
-**Faster start-up**: `runner.leanCalls` (on by default) starts the tool-less classify, plan and review calls without your hooks, plugins, MCP servers and skills. `$env:SMART_DEBUG=1` writes one line per
+**Faster start-up**: `runner.keepAlive` (on by default) keeps one `claude` process running per conversation for the coding steps: the next step or
+follow-up task goes to the running process (the model is switched on it when routing picks another) instead of waiting for Claude Code to start again.
+Measured here: a follow-up message took 1.4 s on the running process against 3.1 s with a new one, at the same cost. A different effort or permission mode
+gets a fresh process; calls with JSON output, a per-call budget or a lean start still run one `claude` each; if a process cannot be kept alive, smart
+goes back to one `claude` per call. An idle process ends after 10 minutes and when smart exits.
+`runner.leanCalls` (on by default) starts the tool-less classify, plan and review calls without your hooks, plugins, MCP servers and skills. `$env:SMART_DEBUG=1` writes one line per
 `claude` call to `%USERPROFILE%\.smart\debug.log` (start-up, first text, total) so you can see whether a slow call is Claude Code's own start-up or the model.
 
 **Get better results**
