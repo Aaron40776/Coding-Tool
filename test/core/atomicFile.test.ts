@@ -4,13 +4,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { quarantineCorrupt, withFileLock, writeFileAtomic } from '../../src/core/store/atomicFile.js';
+import { lockBusy, quarantineCorrupt, withFileLock, writeFileAtomic } from '../../src/core/store/atomicFile.js';
 import { projectRelative } from '../../src/core/runner.js';
 import { InputHistory } from '../../src/core/store/inputHistory.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'smart-lock-'));
 
 describe('withFileLock', () => {
+  it('treats a held lock as busy everywhere, and Windows\' EPERM/EACCES/EBUSY (directory being deleted) as busy only there', () => {
+    expect(lockBusy('EEXIST', 'linux')).toBe(true);
+    for (const c of ['EPERM', 'EACCES', 'EBUSY']) {
+      expect(lockBusy(c, 'win32'), c).toBe(true);
+      expect(lockBusy(c, 'linux'), c).toBe(false); // a read-only directory on Linux must not make us wait 3 s
+    }
+    expect(lockBusy('ENOENT', 'win32')).toBe(false);
+    expect(lockBusy(undefined, 'win32')).toBe(false);
+  });
+
   it('runs the function, returns its value and removes the lock', () => {
     const f = join(tmp(), 'x.json');
     expect(withFileLock(f, () => 42)).toBe(42);
