@@ -11,6 +11,8 @@ export interface OutputLine {
   kind: 'text' | 'tool' | 'info' | 'warn' | 'error' | 'verify-ok' | 'verify-fail' | 'user' | 'diff-add' | 'diff-del' | 'diff-meta' | 'diff-ctx';
   text: string;
   stepId?: string;
+  /** Text still being written (streamed); replaced by the complete text when it arrives. */
+  live?: boolean;
 }
 
 export interface UiState {
@@ -121,8 +123,17 @@ export function reduce(s: UiState, e: UiAction): UiState {
         },
         'info', `▶ ${e.title} [${e.route.tier}${e.attempt > 1 ? `, attempt ${e.attempt}` : ''}]`, e.stepId,
       );
-    case 'step:output':
-      return push(s, e.kind, e.text, e.stepId);
+    case 'step:stream': {
+      // Grow the live line of this step, or start one.
+      const last = s.output.at(-1);
+      if (last?.live && last.stepId === e.stepId) return { ...s, output: [...s.output.slice(0, -1), { ...last, text: last.text + e.text }] };
+      return { ...s, output: [...s.output, { id: s.nextId, kind: 'text' as const, text: e.text, stepId: e.stepId, live: true }].slice(-MAX_OUTPUT), nextId: s.nextId + 1 };
+    }
+    case 'step:output': {
+      // The complete text replaces what was streamed of it; anything else ends a live line as it stands.
+      const withoutLive = s.output.filter((l) => !(l.live && l.stepId === e.stepId));
+      return push({ ...s, output: withoutLive }, e.kind, e.text, e.stepId);
+    }
     case 'tokens':
       return { ...s, session: e.sessionTotal };
     case 'step:verify':

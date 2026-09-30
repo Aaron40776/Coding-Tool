@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Live replies**: coding steps and longer answers stream word by word (`--include-partial-messages`) instead of appearing block by block. The output panel caches the wrapping of every line, so streaming re-wraps only the line that grows.
+- **Overloaded servers**: an "overloaded" or temporary server error from Anthropic's API makes `smart` wait (15 s, then 45 s) and retry the same call, instead of counting a failed step and escalating to a bigger model. Still overloaded: the task stops and stays resumable.
+- **Hard budget cap**: every coding call gets what is left of the task budget as its own `--max-budget-usd`, so `--budget` can no longer be overshot by one long step.
+- **Faster snapshots**: Git's untracked-file cache is used for the `/undo` snapshots, and the end-of-task snapshot is skipped when nothing ran after the last step's. A snapshot slower than 4 s is pointed out once with the fix (`git config core.fsmonitor true`).
+
 ## 0.3.0 (2026-09-30)
 
 - **Install and update in one command**: `irm https://raw.githubusercontent.com/Aaron40776/Smart/main/install.ps1 | iex` checks Git, Node.js 22+ and Claude Code, then clones, builds and links smart; `smart update` pulls, installs and rebuilds. CI parses the installer with Windows PowerShell 5.1 and runs it.

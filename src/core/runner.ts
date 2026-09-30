@@ -149,6 +149,10 @@ export interface RunStepOptions extends Omit<StepPromptInput, 'fileContext'> {
   session?: { id: string; resume: boolean };
   effort?: string;
   onOutput?: (kind: 'text' | 'tool', text: string) => void;
+  /** Live text as it is written; the complete text follows through `onOutput`. */
+  onDelta?: (text: string) => void;
+  /** Most this call may spend (the step cap, or what is left of the task budget). */
+  maxBudgetUsd?: number | null;
   onProgress?: (p: { inputTokens: number; outputTokens: number; cacheReadTokens: number; contextTokens?: number }) => void;
 }
 
@@ -168,6 +172,7 @@ export async function runStep(o: RunStepOptions): Promise<StepRunResult> {
 
   const onEvent = (e: ClaudeStreamEvent) => {
     if (e.kind === 'text') o.onOutput?.('text', e.text);
+    else if (e.kind === 'text-delta') o.onDelta?.(e.text);
     else if (e.kind === 'tool') {
       // Show project-relative paths: absolute ones are long and add no information.
       const short = slash(e.summary.split(`${o.cwd}${sep}`).join('').split(`${o.cwd}/`).join(''));
@@ -186,8 +191,9 @@ export async function runStep(o: RunStepOptions): Promise<StepRunResult> {
     session: o.session,
     effort: o.effort,
     bare: o.config.runner.bare,
-    maxBudgetUsd: o.config.limits.maxBudgetUsdPerStep,
+    maxBudgetUsd: o.maxBudgetUsd !== undefined ? o.maxBudgetUsd : o.config.limits.maxBudgetUsdPerStep,
     extraArgs: o.config.runner.extraArgs,
+    partial: Boolean(o.onDelta),
     onEvent,
   });
   return { text: result.text, usage: result.usage, touched: [...touched] };

@@ -116,7 +116,8 @@ of your global one, key by key, so it only needs what differs. `"//"` keys are n
 - Lower `limits.maxPlanSteps` (default 6). Every step is a separate Claude Code call, and each call carries Claude Code's own base context.
 - Set `limits.maxBudgetUsdPerStep` to cap a runaway step.
 
-**Cap spending**: `limits.maxBudgetUsdPerTask` stops a task once its total cost reaches that many dollars; `limits.maxBudgetUsdPerStep` caps one step.
+**Cap spending**: `limits.maxBudgetUsdPerTask` (or `--budget`) stops a task once its total cost reaches that many dollars; `limits.maxBudgetUsdPerStep` caps one step.
+Each coding call is given what is left of the task budget as its own limit, and Claude Code stops a call that goes over, so a single long step cannot run far past the cap.
 
 **Effort**: chosen per step by the rater (see above; `runner.autoEffort`, on by default). Pin a level per model with `"runner": { "effort": { "haiku": "low", "opus": "high" } }` (levels: low, medium, high, xhigh, max); a pinned level always wins. `"autoEffort": false` leaves Claude Code's default. The Opus planner runs at `high` for big or hard-looking requests and `medium` otherwise.
 
@@ -136,12 +137,18 @@ of your global one, key by key, so it only needs what differs. `"//"` keys are n
 In a git repository, `smart` snapshots the project directory before and after each step using a private temporary index: your index, branches and history are never touched
 (only a few unreferenced objects are added, which `git gc` removes). That finds every changed file, including ones made by shell commands, shows a per-task summary
 (`Changed 3 files (+120 −4)`), and powers `/diff` and `/undo`. Only the directory you started `smart` in is covered, so in a monorepo a sibling package is never reverted.
+Snapshots use Git's untracked-file cache in their private index, and the end-of-task snapshot is skipped when nothing ran after the last step's.
+If one still takes over 4 s (big repositories, especially on Windows), `smart` says so once and suggests `git config core.fsmonitor true`.
 `/undo` reverts only the files the task itself changed: your own edits to other files since then are kept. The last 20 tasks are remembered per directory, so `/undo`
 and `/diff` still work after you quit and start `smart` again (unless `git gc` has since removed the snapshot).
 Not a git repo? `git init` enables it. A failed or cancelled task can be continued with `/resume` (or `smart --resume`), from its first unfinished step.
 
 **Usage limit reached**: when Claude refuses a call because your 5-hour or weekly limit is used up, `smart` stops the task at once instead of retrying or
 escalating to a bigger model (every call would be refused until the reset), says when the limit resets, and keeps the task for `/resume`.
+
+**Servers overloaded**: when Anthropic's API answers "overloaded" (or another temporary server error), `smart` waits 15 s and tries the same call
+again, then 45 s. It never counts that as a failed step or escalates (a bigger model is no less busy). If it is still overloaded, the task stops and
+stays available for `/resume`.
 
 ## Permissions
 

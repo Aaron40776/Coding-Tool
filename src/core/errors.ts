@@ -1,4 +1,4 @@
-export type ErrorKind = 'cli_missing' | 'auth' | 'limit' | 'cancelled' | 'parse' | 'claude' | 'config' | 'internal';
+export type ErrorKind = 'cli_missing' | 'auth' | 'limit' | 'overloaded' | 'cancelled' | 'parse' | 'claude' | 'config' | 'internal';
 
 export class SmartError extends Error {
   /** Spend of a call that ended in an error (it still cost money), so budgets and totals stay honest. */
@@ -35,6 +35,10 @@ export const limitError = (detail: string, resetsAt?: number) => {
   e.resetsAt = resetsAt;
   return e;
 };
+
+/** Anthropic's API is overloaded or failing for everyone: a bigger model would not help, waiting does. */
+export const overloadedError = (detail: string) =>
+  new SmartError('overloaded', `Claude's servers are overloaded right now: ${detail}`, 'Run /resume (or `smart --resume`) in a few minutes to continue from the unfinished step.');
 
 export const cancelled = () => new SmartError('cancelled', 'Cancelled.');
 

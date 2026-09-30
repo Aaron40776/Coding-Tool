@@ -15,6 +15,8 @@ export type SmartEvent =
   | { type: 'plan:approved'; plan: Plan }
   | { type: 'step:start'; stepId: string; title: string; route: RouteDecision; attempt: number; at?: number }
   | { type: 'step:output'; stepId: string; kind: 'text' | 'tool'; text: string }
+  /** Live text of a step as it is written; the complete text follows as `step:output`. */
+  | { type: 'step:stream'; stepId: string; text: string }
   | { type: 'tokens'; stepId?: string; usage: Usage; sessionTotal: Usage }
   | { type: 'step:verify'; stepId: string; command: string; ok: boolean; output: string }
   | { type: 'step:review'; stepId: string; pass: boolean; issues: string[]; skipped?: string }

@@ -2,13 +2,15 @@ import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { authError, cancelled, cliMissing, limitError, SmartError } from './errors.js';
+import { authError, cancelled, cliMissing, limitError, overloadedError, SmartError } from './errors.js';
 import { emptyUsage, type LimitWindow, type Usage } from './types.js';
 
 /** Normalised view of Claude Code's `--output-format stream-json` events. */
 export type ClaudeStreamEvent =
   | { kind: 'init'; model: string; sessionId: string }
   | { kind: 'text'; text: string }
+  /** A piece of text as the model writes it (`partial` calls only); the complete block follows as a `text` event. */
+  | { kind: 'text-delta'; text: string }
   | { kind: 'tool'; name: string; summary: string; /** Set for tools that modify a file. */ writtenFile?: string }
   | { kind: 'progress'; inputTokens: number; outputTokens: number; cacheReadTokens: number; /** Size of the conversation as of the latest message: what the next turn re-reads. */ contextTokens: number }
   | { kind: 'limits'; windows: Record<string, LimitWindow>; status?: string }
@@ -98,6 +100,12 @@ export class StreamParser {
         return d.subtype === 'init' ? [{ kind: 'init', model: str(d.model), sessionId: str(d.session_id) }] : [];
       case 'assistant':
         return this.assistant(d);
+      case 'stream_event': {
+        // Live text of the main conversation (a subagent's has a parent_tool_use_id); thinking is not shown.
+        const ev = isObj(d.event) ? d.event : null;
+        const delta = ev && ev.type === 'content_block_delta' && isObj(ev.delta) ? ev.delta : null;
+        return delta && delta.type === 'text_delta' && !d.parent_tool_use_id && str(delta.text) ? [{ kind: 'text-delta', text: str(delta.text) }] : [];
+      }
       case 'rate_limit_event': {
         const info = isObj(d.rate_limit_info) ? d.rate_limit_info : null;
         const windows: Record<string, LimitWindow> = {};
@@ -188,6 +196,8 @@ export interface RunClaudeOptions {
    */
   lean?: boolean;
   maxBudgetUsd?: number | null;
+  /** Stream text as it is written (`--include-partial-messages`): replies appear word by word instead of block by block. */
+  partial?: boolean;
   extraArgs?: string[];
   onEvent?: (e: ClaudeStreamEvent) => void;
   /** Injectable for tests. */
@@ -208,6 +218,7 @@ export function buildArgs(o: RunClaudeOptions): string[] {
   if (o.bare) args.push('--bare');
   if (o.lean) args.push('--strict-mcp-config', '--disable-slash-commands', '--setting-sources', '');
   if (o.maxBudgetUsd) args.push('--max-budget-usd', String(o.maxBudgetUsd));
+  if (o.partial) args.push('--include-partial-messages');
   if (o.extraArgs?.length) args.push(...o.extraArgs);
   return args;
 }
@@ -244,11 +255,16 @@ export function limitFailure(detail: string): { message: string; resetsAt?: numb
   return { message, resetsAt: epoch ? Number(epoch[1]) : undefined };
 }
 
-/** The error for a failed call: not logged in, usage limit, or anything else. */
+/** A temporary problem on Anthropic's side (HTTP 529 overloaded, 500/502/503). Only short error lines: long text is model output. */
+const OVERLOAD_RE = /(overloaded|\b529\b|api error:? 5\d\d|internal server error|service unavailable|bad gateway)/i;
+export const isOverloaded = (detail: string): boolean => detail.length <= 400 && OVERLOAD_RE.test(detail);
+
+/** The error for a failed call: not logged in, usage limit, servers overloaded, or anything else. */
 export function callError(detail: string, prefix: string): SmartError {
   if (isAuthFailure(detail)) return authError(detail);
   const limit = limitFailure(detail);
   if (limit) return limitError(limit.message, limit.resetsAt);
+  if (isOverloaded(detail)) return overloadedError(detail);
   return new SmartError('claude', `${prefix}: ${detail}`);
 }
 
