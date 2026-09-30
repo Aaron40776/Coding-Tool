@@ -10,17 +10,15 @@ with the same follow-up context, and shows what everything costs.
 
 ## Install
 
-For **Windows 10 and 11**. Needs Node.js 22+ and the [Claude Code CLI](https://docs.claude.com/claude-code) on your `PATH`, logged in (run `claude` once). In PowerShell:
+For **Windows 10 and 11**. Needs [Git](https://git-scm.com/download/win), Node.js 22+ and the [Claude Code CLI](https://docs.claude.com/claude-code), logged in (run `claude` once). In PowerShell:
 
 ```powershell
-git clone https://github.com/Aaron40776/Smart.git
-cd Smart
-npm install
-npm run build
-npm link            # puts `smart` on your PATH
+irm https://raw.githubusercontent.com/Aaron40776/Smart/main/install.ps1 | iex
 ```
 
-Update: `git pull`, then `npm install` and `npm run build` in the `Smart` folder. If scripts are blocked, run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once.
+That clones smart into `%USERPROFILE%\Smart` (`$env:SMART_DIR` picks another folder), builds it and puts `smart` on your `PATH`. **Update** any time with `smart update`.
+By hand instead: `git clone https://github.com/Aaron40776/Smart.git`, then in `Smart` run `npm install`, `npm run build` and `npm link`.
+If scripts are blocked, run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once.
 If `claude` is not found, set its full path: `$env:SMART_CLAUDE_BIN = "C:\path\to\claude.exe"`.
 
 ## Use
@@ -35,10 +33,12 @@ smart --model haiku "fix the typo" # force a tier      (--no-plan skips planning
 smart -p "fix the typo" | cat      # headless (--print): reply on stdout, progress on stderr (--output-format json for scripts, --verbose for tool calls)
 smart --rate "fix the race in worker.js"  # show which model and effort it would pick, and why (calls no model)
 smart --no-review "..."            # skip the acceptance review     (--config ./my.json uses another config file)
+smart update                       # get the latest version (git pull, install, build)
 smart init                         # write a starter smart.config.json (--global: %USERPROFILE%\.smart, for all projects)
 ```
 
 In the app: `Enter` sends, `Esc` cancels, `Tab` switches panel, `@path` adds a file (Tab completes), `\`+`Enter` starts a new line, `↑` recalls earlier prompts.
+In Windows Terminal the tab and taskbar button show progress: steps done, yellow while a plan waits for you, red if a task failed.
 While a task runs you can type the next one: `Enter` queues it and it starts when the current task completes (`/usage`, `/cost`, `/diff` work meanwhile).
 
 | Command | |

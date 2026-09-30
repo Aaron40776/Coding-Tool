@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Command, InvalidArgumentError } from 'commander';
 import { render } from 'ink';
 import pkg from '../package.json' with { type: 'json' };
@@ -14,12 +15,14 @@ import { Pipeline } from './core/pipeline.js';
 import { isTier } from './core/router.js';
 import { buildHistory } from './core/rating/learn.js';
 import { initConfig } from './init.js';
+import { updateSmart } from './update.js';
 import { describeRating } from './rate.js';
 import { runPrint } from './print.js';
 import { Tracker } from './core/store/tracker.js';
 import { LimitsStore } from './core/store/limits.js';
 import type { ModelTier } from './core/types.js';
 import { App } from './ui/App.js';
+import { CLEAR_PROGRESS } from './ui/progress.js';
 
 function parseModel(value: string): ModelTier {
   const v = value.toLowerCase();
@@ -70,9 +73,13 @@ async function readStdin(): Promise<string> {
 }
 
 async function main() {
+  const argv = process.argv.slice(2);
+  // `smart update` pulls the latest version into the folder smart was cloned to and rebuilds it. Like `init`, only as the
+  // whole command line, so a task that starts with the word ("update the readme") still runs as a task.
+  if (argv.length === 1 && argv[0] === 'update') process.exit(updateSmart(fileURLToPath(new URL('..', import.meta.url))));
+
   // `smart init [--global] [--force]` writes a starter config. Only when it is the whole command line, so a task
   // that merely starts with the word "init" (`smart init the repo`) still runs as a task.
-  const argv = process.argv.slice(2);
   const initFlags = argv.slice(1);
   if (argv[0] === 'init' && initFlags.length <= 2 && initFlags.every((f) => f === '--force' || f === '--global')) {
     const target = initFlags.includes('--global') ? globalConfigPath() : join(process.cwd(), 'smart.config.json');
@@ -181,7 +188,10 @@ async function main() {
   };
   altScreen(true);
   const restore = () => {
-    if (altScreenActive) altScreen(false);
+    if (altScreenActive) {
+      process.stdout.write(CLEAR_PROGRESS); // never leave a stuck progress bar on the taskbar
+      altScreen(false);
+    }
   };
   process.on('exit', restore);
   process.on('SIGTERM', () => {
@@ -201,6 +211,7 @@ async function main() {
       startupNotices={startupNotices}
       inputHistory={new InputHistory(expandHome(config.historyPath))}
       oneShot={Boolean(task) || Boolean(opts.resume)}
+      terminal={{ write: (seq) => void process.stdout.write(seq) }}
       initial={{ prompt: task, dryRun: opts.dryRun, noPlan: !opts.plan, model: opts.model ?? null, resume: opts.resume }}
       onExit={(ok) => {
         exitCode = ok ? 0 : 1;
