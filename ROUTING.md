@@ -6,11 +6,12 @@ To see one without running anything: `smart --rate "your task"`.
 
 ## The pipeline
 
-1. **Classify** (cheap model, default Haiku). Scores your prompt as one of four complexities, says whether it needs a plan and how hard it is (`easy`, `normal`, `hard`). If the prompt is a pure question that needs none of your files, tools or current information, the classifier **answers it in the same call**: one Haiku call in total, no coding session. Greetings ("hey", "thanks") skip even the classifier.
-2. **Plan**, only when the task needs one (a large build always does; `--no-plan` turns this off). Big builds and requests rated hard are planned by Opus (`routing.planner`); mid-size, multi-part changes by Sonnet (`routing.plannerLight`): about 2× cheaper (measured $0.016 vs $0.033 for the same plan) and somewhat faster, and plenty for a short plan. The planner also rates each step `easy`, `normal` or `hard`. Plans are kept to a few substantial steps (`limits.maxPlanSteps`, default 6), because every step is a separate Claude Code call.
-3. **Rate and route** every step: the rater (below) picks a model and an effort.
-4. **Execute** each step with a lean prompt, then **verify** it (tests, lint, build; not for docs-only changes) and review it.
-5. **Escalate** a step that keeps failing: one more try with more effort, then the next model up.
+1. **Classify** (cheap model, default Haiku). Scores your prompt as one of four complexities, says whether it needs a plan and how hard it is (`easy`, `normal`, `hard`). Clearly routine one-line edits ("fix the typo in the README", "rename x to count") are recognised locally and **skip this call entirely** (the fast lane, about 5 s saved; `routing.fastLane`). Greetings ("hey", "thanks") skip it too.
+2. **Answer**, if the prompt is a pure question that needs none of your files, tools or current information. An easy one is answered by the classifier in the same call (one Haiku call in total). A question the rater finds hard (score 0.25 or more) is answered by the model and effort it picks, in one more tool-free call: still no coding session.
+3. **Plan**, only when the task needs one (a large build always does; `--no-plan` turns this off). Big builds and requests rated hard are planned by Opus (`routing.planner`); mid-size, multi-part changes by Sonnet (`routing.plannerLight`): about 2× cheaper (measured $0.016 vs $0.033 for the same plan) and somewhat faster, and plenty for a short plan. The planner also rates each step `easy`, `normal` or `hard`. Plans are kept to a few substantial steps (`limits.maxPlanSteps`, default 6), because every step is a separate Claude Code call.
+4. **Rate and route** every step: the rater (below) picks a model and an effort.
+5. **Execute** each step with a lean prompt, then **verify** it (tests, lint, build; not for docs-only changes) and **review** it. The reviewer is Haiku, or Sonnet at low effort for a step rated as hard as Opus work: a weak model cannot check work it could not do.
+6. **Escalate** a step that keeps failing: one more try with more effort, then the next model up.
 
 ## The rater: which model, which effort
 

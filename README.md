@@ -51,7 +51,7 @@ In the app: `Enter` sends, `Esc` cancels, `Tab` switches panel, `@path` adds a f
 
 ## How it saves usage
 
-- A cheap model classifies every task; a **pure question is answered by that same call**, and "hey" costs one tiny call.
+- A cheap model classifies every task (skipped for routine edits like "fix the typo"); an **easy question is answered by that same call**, a hard one by the model it needs, and "hey" costs one tiny call.
 - **Opus plans, Sonnet builds**: big builds get a short plan from Opus (mid-size ones from Sonnet), then each step runs on the cheapest model and effort its rating allows. A hard step goes to Opus. Docs-only changes skip the test run.
 - **Model and effort come from a rating**, not a fixed table: local signals in your text, the classifier's opinion and, per plan step, the planner's, blended into a score with a confidence. Routine work runs on Sonnet at low effort, hard work on Opus at medium to xhigh. It also learns which rungs worked for you. `smart --rate "your task"` shows the rating and why, for free.
 - Failures **escalate one model at a time**; nothing jumps to Opus by default. Near an account limit, automatic Opus choices drop to Sonnet.

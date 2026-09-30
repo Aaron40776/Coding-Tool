@@ -32,10 +32,10 @@ describe('App', () => {
       return { isError: false, subtype: 'success', text: 'ok', structured: undefined, usage: { ...emptyUsage(), costUsd: 0.05, outputTokens: 200 }, sessionId: 's', numTurns: 1 };
     };
     const { stdin, lastFrame } = render(<App {...makeApp({ complexity: 'small_edit', executor })} />);
-    await type(stdin, 'fix the typo');
+    await type(stdin, 'make the parser handle empty input');
     await waitFor(() => lastFrame()!.includes('✓ Done'));
     const f = lastFrame()!;
-    expect(f).toContain('> fix the typo');
+    expect(f).toContain('> make the parser handle empty input');
     expect(f).toContain('Classified as small_edit');
     expect(f).toContain('Sonnet');
     expect(f).toMatch(/sonnet · \w+ · rated \d\.\d\d/); // the rater's reason is shown

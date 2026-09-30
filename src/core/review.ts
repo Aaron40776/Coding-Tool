@@ -5,7 +5,7 @@ import { SmartError } from './errors.js';
 import { structuredFrom } from './json.js';
 import { modelFor, routeRole } from './router.js';
 import type { FileContext } from './runner.js';
-import type { PlanStep, Usage } from './types.js';
+import type { ModelTier, PlanStep, Usage } from './types.js';
 import { emptyUsage } from './types.js';
 
 export const REVIEWER_SYSTEM = `You are a pragmatic code reviewer acting as a quality gate for a cheaper coding model.
@@ -46,6 +46,9 @@ export interface ReviewInput {
   cwd: string;
   run: RunClaudeFn;
   signal?: AbortSignal;
+  /** The model and effort chosen for this step's review (see reviewerTier); the configured reviewer when omitted. */
+  tier?: ModelTier;
+  effort?: string;
 }
 
 export function buildReviewPrompt(i: Pick<ReviewInput, 'task' | 'step' | 'files'>): string {
@@ -64,7 +67,8 @@ export async function reviewStep(i: ReviewInput): Promise<ReviewOutcome> {
   try {
     const result = await i.run({
       prompt: buildReviewPrompt(i),
-      model: modelFor(role.tier, i.config),
+      model: modelFor(i.tier ?? role.tier, i.config),
+      effort: i.effort,
       cwd: i.cwd,
       signal: i.signal,
       systemPrompt: REVIEWER_SYSTEM,

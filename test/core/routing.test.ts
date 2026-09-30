@@ -195,7 +195,7 @@ describe('the git snapshot runs while the classifier thinks', () => {
     };
     const t = setup({ checkpoints: cp, executor: () => { order.push('executor'); return { isError: false, subtype: 'success', text: 'ok', structured: undefined, usage: emptyUsage(), sessionId: 's', numTurns: 1 }; } });
     t.events.length = 0;
-    await t.pipeline.runTask('rename foo');
+    await t.pipeline.runTask('make the parser handle empty input');
     expect(order[0]).toBe('snapshot-start');
     expect(order.indexOf('snapshot-done')).toBeLessThan(order.indexOf('executor'));
     expect(t.calls[0]?.role).toBe('classifier');
@@ -306,7 +306,7 @@ describe('finishing a task', () => {
       };
       return { pipeline: new Pipeline(defaultConfig(), bus, t.cwd, { run, tracker, uid: 1000, listFiles: () => [] }), events: evs };
     })();
-    await pipeline.runTask('rename foo');
+    await pipeline.runTask('make the parser handle empty input');
     expect(events.some((e) => e.type === 'error')).toBe(true);
     expect(order).toEqual(['tracker', 'error']);
   });

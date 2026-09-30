@@ -63,6 +63,17 @@ export function route(
   return withRating(decision(rating.rung.tier, config, rating.summary, 'complexity'));
 }
 
+/** A question the classifier already answered is re-answered by a stronger model only when the rating is clearly above routine (Sonnet medium and up). */
+export const ANSWER_UPGRADE_SCORE = 0.25;
+
+/** A step rated this hard (Opus territory) is reviewed by at least Sonnet: Haiku is too weak to check work it could not do. */
+export const REVIEW_UPGRADE_SCORE = 0.62;
+
+export function reviewerTier(score: number | undefined, config: SmartConfig): ModelTier {
+  const configured = config.routing.reviewer;
+  return score !== undefined && score >= REVIEW_UPGRADE_SCORE && RANK[configured] < RANK.sonnet ? 'sonnet' : configured;
+}
+
 /** A task rated this hard is planned by the strong planner even when it is not a big build. */
 export const HEAVY_PLAN_SCORE = 0.62;
 

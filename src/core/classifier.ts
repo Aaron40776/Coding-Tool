@@ -3,6 +3,7 @@ import type { RunClaudeFn } from './claude.js';
 import type { SmartConfig } from './config.js';
 import { SmartError } from './errors.js';
 import { extractJson, structuredFrom } from './json.js';
+import { extractFeatures } from './rating/features.js';
 import { modelFor, routeRole } from './router.js';
 import { COMPLEXITIES, emptyUsage, type Classification, type Usage } from './types.js';
 
@@ -53,6 +54,20 @@ export function parseClassification(raw: unknown): Classification | null {
   // Only a trivial task may be answered on the spot; an empty or whitespace answer means "go and do it".
   const answer = complexity === 'trivial' ? parsed.data.answer?.trim() || undefined : undefined;
   return { complexity, needsPlan, reason: parsed.data.reason?.trim() || `classified as ${complexity}`, ...(parsed.data.difficulty ? { difficulty: parsed.data.difficulty } : {}), ...(answer ? { answer } : {}) };
+}
+
+/**
+ * The fast lane: a request that is clearly a routine edit ("fix the typo in the readme", "rename x to count") is recognised
+ * locally, so the classifier call (a whole model round trip, about 5 s and a little money) is skipped. Deliberately narrow:
+ * short, one line, an explicit small-change phrase, nothing that reads as hard, no questions, no lists of jobs. Anything
+ * else, including every build request, still goes to the classifier.
+ */
+export function fastClassify(prompt: string, config: SmartConfig): Classification | null {
+  if (!config.routing.fastLane || prompt.includes('\n')) return null;
+  const f = extractFeatures({ text: prompt });
+  const routine = f.words <= 25 && f.parts <= 2 && f.hard.length === 0 && f.files <= 2 && f.easy.some((s) => s.label === 'trivial edit');
+  if (!routine || f.easy.some((s) => s.label === 'question only')) return null;
+  return { complexity: 'small_edit', needsPlan: false, difficulty: 'easy', reason: 'Routine edit recognised locally (fast lane): no classifier call.' };
 }
 
 export interface ClassifyContext {
