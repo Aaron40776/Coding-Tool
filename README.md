@@ -38,12 +38,13 @@ smart init                         # write a starter smart.config.json
 ```
 
 In the app: `Enter` sends, `Esc` cancels, `Tab` switches panel, `@path` adds a file (Tab completes), `\`+`Enter` starts a new line, `↑` recalls earlier prompts.
+While a task runs you can type the next one: `Enter` queues it and it starts when the current task completes (`/usage`, `/cost`, `/diff` work meanwhile).
 
 | Command | |
 | --- | --- |
 | `/stats` `/usage` `/cost` | spend history, your 5-hour / 7-day account limits, this session's cost |
 | `/model haiku\|sonnet\|opus\|auto` | force a model; `/dry` toggles dry-run |
-| `/undo` `/diff` `/resume` | revert or show the last task's file changes (needs git), continue an unfinished task |
+| `/undo` `/diff` `/resume` | revert or show the last task's file changes (needs git; also after a restart), continue an unfinished task |
 | `/mode bypass\|edits\|plan\|auto` | permission mode (`plan` is read-only) |
 | `/new` `/config` `/help` `/quit` | fresh conversation, effective settings, help, exit |
 

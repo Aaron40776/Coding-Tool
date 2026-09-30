@@ -25,6 +25,13 @@ export interface PendingTask {
   at: string;
 }
 
+/** A task that changed files: the working-tree snapshots before and after it (git tree ids), for /undo and /diff. */
+export interface UndoEntry {
+  prompt: string;
+  start: string;
+  end: string;
+}
+
 /**
  * One continuous conversation with Claude Code. `sessionId` is the persisted Claude Code session the
  * coding steps resume; `tasks` is a compact memory for the stateless calls (classifier, planner) and
@@ -38,6 +45,8 @@ export interface Conversation {
   lastCallAtByTier?: Partial<Record<ModelTier, number>>;
   tasks: TaskMemory[];
   pending?: PendingTask;
+  /** Tasks that changed files, oldest first (at most 20). */
+  undo?: UndoEntry[];
 }
 
 export const newConversation = (): Conversation => ({ id: randomUUID(), sessionId: null, tasks: [] });
@@ -78,6 +87,12 @@ export function renderMemory(conv: Conversation, maxChars = 3500): string {
   return out.length > maxChars ? out.slice(-maxChars) : out;
 }
 
+function validUndo(u: unknown): UndoEntry[] | undefined {
+  if (!Array.isArray(u)) return undefined;
+  const ok = u.filter((e): e is UndoEntry => !!e && typeof e.prompt === 'string' && typeof e.start === 'string' && typeof e.end === 'string');
+  return ok.length ? ok : undefined;
+}
+
 function validPending(p: unknown): PendingTask | undefined {
   const t = p as Partial<PendingTask> | null | undefined;
   if (!t || typeof t.prompt !== 'string' || !t.plan || !Array.isArray(t.plan.steps) || !t.classification || !Array.isArray(t.doneStepIds)) return undefined;
@@ -107,7 +122,7 @@ export class ConversationStore {
   load(cwd: string): Conversation | null {
     const c = this.read().byDir[cwd];
     if (!c || !Array.isArray(c.tasks)) return null;
-    return { id: c.id, sessionId: c.sessionId ?? null, lastTier: c.lastTier, lastCallAt: c.lastCallAt, lastCallAtByTier: c.lastCallAtByTier, tasks: c.tasks, pending: validPending(c.pending) };
+    return { id: c.id, sessionId: c.sessionId ?? null, lastTier: c.lastTier, lastCallAt: c.lastCallAt, lastCallAtByTier: c.lastCallAtByTier, tasks: c.tasks, pending: validPending(c.pending), undo: validUndo(c.undo) };
   }
 
   /** Returns an error message when it could not be saved. */

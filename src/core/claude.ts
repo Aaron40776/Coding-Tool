@@ -2,7 +2,7 @@ import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { authError, cancelled, cliMissing, SmartError } from './errors.js';
+import { authError, cancelled, cliMissing, limitError, SmartError } from './errors.js';
 import { emptyUsage, type LimitWindow, type Usage } from './types.js';
 
 /** Normalised view of Claude Code's `--output-format stream-json` events. */
@@ -228,6 +228,28 @@ export function resolvePermissionMode(mode: string, uid: number | undefined = pr
 const AUTH_RE = /(not logged in|please (?:run )?\/?log ?in|\/login|not authenticated|authentication (?:failed|error|required)|invalid (?:x-)?api[ -]key|missing api key|\b401\b|unauthori[sz]ed|oauth token)/i;
 export const isAuthFailure = (detail: string): boolean => !/No conversation found/i.test(detail) && AUTH_RE.test(detail);
 
+/**
+ * Signs that the account's usage limit refused the call (subscription 5-hour / weekly windows, or an API rate limit).
+ * Old Claude Code versions report "Claude AI usage limit reached|<epoch seconds>", newer ones "5-hour limit reached ∙ resets 3pm"
+ * or "You've hit your limit · resets 5pm".
+ */
+const LIMIT_RE = /(usage limit reached|(?:5-hour|weekly|opus|session|daily) limit reached|hit your (?:[\w-]+ )?limit|limit reached[^\n]*resets|rate_limit_error)/i;
+export function limitFailure(detail: string): { message: string; resetsAt?: number } | null {
+  // Claude Code's limit notices are one short line; a long text is model output that merely talks about limits.
+  if (detail.length > 400 || !LIMIT_RE.test(detail)) return null;
+  const epoch = /\|(\d{9,11})\b/.exec(detail);
+  const message = detail.replace(/\|\d{9,11}\b/, '').trim() || 'usage limit reached';
+  return { message, resetsAt: epoch ? Number(epoch[1]) : undefined };
+}
+
+/** The error for a failed call: not logged in, usage limit, or anything else. */
+export function callError(detail: string, prefix: string): SmartError {
+  if (isAuthFailure(detail)) return authError(detail);
+  const limit = limitFailure(detail);
+  if (limit) return limitError(limit.message, limit.resetsAt);
+  return new SmartError('claude', `${prefix}: ${detail}`);
+}
+
 const KILL_GRACE_MS = 2000;
 
 /** Runs one headless Claude Code call. The prompt goes over stdin (no argv size limits, no stdin wait). */
@@ -236,7 +258,7 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
     if (opts.signal?.aborted) return reject(cancelled());
 
     const spawnFn = opts.spawnImpl ?? nodeSpawn;
-    const command: ClaudeCommand = opts.binary ? { cmd: opts.binary, prefix: [] } : resolveClaudeCommand();
+    const command: ClaudeCommand = opts.binary ? { cmd: opts.binary, prefix: [] } : claudeCommand();
     let child: ChildProcess;
     try {
       child = spawnFn(command.cmd, [...command.prefix, ...buildArgs(opts)], { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -299,15 +321,13 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
         if (opts.signal?.aborted) return reject(cancelled());
         if (result) {
           if (result.isError) {
-            const detail = result.text || result.subtype || 'unknown error';
-            const err = isAuthFailure(detail) ? authError(detail) : new SmartError('claude', `Claude Code reported an error: ${detail}`);
+            const err = callError(result.text || result.subtype || 'unknown error', 'Claude Code reported an error');
             err.usage = result.usage; // the call still cost money
             return reject(err);
           }
           return resolve(result);
         }
-        const detail = stderr.trim() || `exit code ${code}`;
-        reject(isAuthFailure(detail) ? authError(detail) : new SmartError('claude', `Claude Code failed: ${detail}`));
+        reject(callError(stderr.trim() || `exit code ${code}`, 'Claude Code failed'));
       });
     });
   });
@@ -355,6 +375,14 @@ export interface ClaudeCommand {
   cmd: string;
   /** Arguments that must precede the real ones (e.g. the cli.js path when launching via node). */
   prefix: string[];
+}
+
+let resolved: { key: string; command: ClaudeCommand } | undefined;
+/** `resolveClaudeCommand`, remembered while PATH is unchanged: on Windows it probes every PATH directory, and a task makes many calls. */
+function claudeCommand(): ClaudeCommand {
+  const key = `${process.env.SMART_CLAUDE_BIN ?? ''}\0${process.env.PATH ?? process.env.Path ?? ''}`;
+  if (resolved?.key !== key) resolved = { key, command: resolveClaudeCommand() };
+  return resolved.command;
 }
 
 /**

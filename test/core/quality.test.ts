@@ -109,7 +109,7 @@ describe('change tracking, /diff and /undo', () => {
     expect(t.of('notice').some((n) => /Undid "edit things"/.test(n.message))).toBe(true);
     await t.pipeline.runTask('try something else');
     const second = t.role('executor')[1]!;
-    expect(second.prompt).toContain('The user undid all of your changes');
+    expect(second.prompt).toContain('The user undid your file changes from the task "edit things"');
     expect(t.role('classifier')[1]?.prompt).toContain('→ reverted');
     await t.pipeline.undo();
     expect(t.of('notice').at(-1)?.message).toBe('Nothing to undo.');

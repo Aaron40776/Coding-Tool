@@ -1,5 +1,5 @@
 import { Box, Text } from 'ink';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { OutputLine } from '../state.js';
 import { ACCENT } from '../theme.js';
 
@@ -121,7 +121,9 @@ export interface OutputLogProps {
 }
 
 export function OutputLog({ lines, height, scroll: wanted, width, focused, welcome, onMaxScroll }: OutputLogProps) {
-  const rows = toRows(lines, width ? width - 4 : 0); // minus the 2-col row prefix and a margin
+  // Wrapping every line is the costliest part of a frame; token updates re-render often without changing the log.
+  const wrapAt = width ? width - 4 : 0; // minus the 2-col row prefix and a margin
+  const rows = useMemo(() => toRows(lines, wrapAt), [lines, wrapAt]);
   const visible = Math.max(1, height - 3); // borders + title
   const max = Math.max(0, rows.length - visible);
   const scroll = Math.min(wanted, max); // never scroll past the first row

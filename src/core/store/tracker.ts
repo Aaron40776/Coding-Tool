@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import type { Classification, Usage } from '../types.js';
 import { quarantineCorrupt, withFileLock, writeFileAtomic } from './atomicFile.js';
 
@@ -40,13 +40,25 @@ const MAX_PROMPT = 500;
 
 /** Append-only task log in a single local JSON file. Never throws into the pipeline. */
 export class Tracker {
+  /** The last parse, reused while the file is unchanged: it is read at the start of every task, for /cost and for /stats. */
+  private cache: { stamp: string; tasks: TaskRecord[] } | null = null;
+
   constructor(private readonly path: string) {}
 
   load(): TaskRecord[] {
-    if (!existsSync(this.path)) return [];
+    let stamp: string;
+    try {
+      const st = statSync(this.path);
+      stamp = `${st.ino}:${st.size}:${st.mtimeMs}`;
+    } catch {
+      return [];
+    }
+    if (this.cache?.stamp === stamp) return [...this.cache.tasks];
     try {
       const data = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<HistoryFile>;
-      return Array.isArray(data.tasks) ? data.tasks : [];
+      const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+      this.cache = { stamp, tasks };
+      return [...tasks];
     } catch {
       quarantineCorrupt(this.path); // keep it for inspection and start fresh rather than crash
       return [];
@@ -58,7 +70,9 @@ export class Tracker {
     try {
       withFileLock(this.path, () => {
         const tasks = [...this.load(), { ...record, prompt: record.prompt.slice(0, MAX_PROMPT) }].slice(-MAX_TASKS);
-        writeFileAtomic(this.path, JSON.stringify({ version: 1, tasks } satisfies HistoryFile, null, 2));
+        // Compact: up to 1000 tasks with their steps; indentation made the file about 40% bigger to read and write.
+        writeFileAtomic(this.path, JSON.stringify({ version: 1, tasks } satisfies HistoryFile));
+        this.cache = null;
       });
       return null;
     } catch (e) {

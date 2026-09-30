@@ -22,7 +22,7 @@ import { gatherFiles, runStep } from './runner.js';
 import type { StepOutcome, StepRecord, TaskRecord, Tracker } from './store/tracker.js';
 import { addUsage, emptyUsage, type Classification, type Limits, type ModelTier, type Plan, type PlanStep, type RouteDecision, type Usage } from './types.js';
 import { LimitsStore } from './store/limits.js';
-import { applyLimitPressure, fmtReset, pct, windowLabel } from './usage.js';
+import { applyLimitPressure, fmtReset, pct, tightest, windowLabel } from './usage.js';
 import { detectChecks, isDocsOnly, nextAttempt, runChecks, type ExecFn } from './verifier.js';
 
 export interface PipelineDeps {
@@ -81,7 +81,6 @@ export class Pipeline {
   private conv: Conversation;
   private lastReply = '';
   private overhead: Usage = emptyUsage();
-  private undoStack: { prompt: string; start: string; end: string }[] = [];
   private notes: string[] = [];
   private permOverride: string | null = null;
   private warnedNoGit = false;
@@ -191,7 +190,8 @@ export class Pipeline {
   /** Forget the conversation: the next task starts a fresh Claude Code session with no memory. */
   newConversation(): void {
     if (this.running) throw new SmartError('internal', 'Cancel the running task before starting a new conversation.');
-    this.conv = newConversation();
+    // Undo is about your files, not the chat: it survives a new conversation.
+    this.conv = { ...newConversation(), ...(this.conv.undo ? { undo: this.conv.undo } : {}) };
     this.saveConversation();
     this.emitConversation();
   }
@@ -243,7 +243,7 @@ export class Pipeline {
     this.overhead = emptyUsage();
     const touched: string[] = [];
     let startTree: string | null = null;
-    const doneRef: { ids: Set<string> } = { ids: new Set() };
+    const doneRef: { ids: Set<string>; executing: boolean } = { ids: new Set(), executing: false };
     this.lastReply = '';
 
     const emit = this.bus.emit.bind(this.bus);
@@ -305,8 +305,10 @@ export class Pipeline {
         if (classification.answer && !this.forced && !dryRun && !referenced.length) {
           // The classifier's own answer is right for an easy question. A question the rater finds hard is answered by the model
           // it picks, at its effort (one more tool-free call; still no coding session).
-          const rated = this.routeTask(classification, prompt);
-          const worthUpgrading = rated.tier !== 'haiku' && (rated.score ?? 0) >= ANSWER_UPGRADE_SCORE;
+          // Keyword rules ("deadlock" → Opus) are about doing the work, not explaining it, and a question the classifier itself
+          // rated easy is answered well enough already ("what is a deadlock?").
+          const rated = this.routeTask(classification, prompt, this.taskFiles, false);
+          const worthUpgrading = classification.difficulty !== 'easy' && rated.tier !== 'haiku' && (rated.score ?? 0) >= ANSWER_UPGRADE_SCORE;
           return await this.respond(prompt, summary, { startedAt, memory, at, stage, touched }, { classification, text: classification.answer, upgrade: worthUpgrading ? rated : undefined });
         }
 
@@ -358,6 +360,7 @@ export class Pipeline {
       // 4. execute (+ verify per step)
       at('execute');
       const cursor = { tree: startTree };
+      doneRef.executing = true;
       const active = plan.steps.filter((s) => !s.skipped);
       let failed = false;
       for (const [index, step] of active.entries()) {
@@ -380,12 +383,15 @@ export class Pipeline {
       if (isCancelled(e)) summary.cancelled = true;
       // Save the state (checkpoint, /resume, cost record) BEFORE telling the frontend the task is over: a one-shot run exits
       // as soon as it sees the terminal event, and would otherwise lose all of it.
-      const out = await this.finish(summary, { startedAt, prompt, touched, startTree, aborted: true, doneIds: doneRef.ids });
+      const out = await this.finish(summary, { startedAt, prompt, touched, startTree, aborted: true, doneIds: doneRef.ids, executing: doneRef.executing });
       stage(current, 'failed');
       if (summary.cancelled) emit({ type: 'task:cancelled', taskId });
       else {
         const err = e instanceof SmartError ? e : new SmartError('internal', (e as Error).message ?? String(e));
-        emit({ type: 'error', kind: err.kind, message: err.message, hint: err.hint });
+        const limited = err.kind === 'limit';
+        // Nothing to /resume when the limit hit before a step ran (while classifying or planning): the task is simply sent again.
+        const hint = limited && this.conv.pending?.prompt !== prompt ? 'Send the task again once it resets.' : err.hint;
+        emit({ type: 'error', kind: err.kind, message: limited ? this.limitMessage(err) : err.message, hint });
       }
       return out;
     } finally {
@@ -516,6 +522,13 @@ export class Pipeline {
     }
   }
 
+  /** "Your Claude usage limit is reached: … (resets in 2h 14m)" using the reset time Claude gave, or the last one it reported. */
+  private limitMessage(err: SmartError): string {
+    const resetsAt = err.resetsAt ?? tightest(this.limits, this.now())?.window.resetsAt;
+    const reset = fmtReset(resetsAt, this.now());
+    return reset && !/resets/i.test(err.message) ? `${err.message} (resets in ${reset})` : err.message;
+  }
+
   /** Human-readable effective configuration, for /config. */
   describe(): string[] {
     return describeConfig(this.config, { permissionMode: this.permissionMode, modeOverridden: this.permOverride !== null, limits: this.limits });
@@ -538,8 +551,8 @@ export class Pipeline {
     }
   }
 
-  private routeTask(classification: Classification, text: string, files: string[] = this.taskFiles): RouteDecision {
-    return this.warm(route({ classification, text, override: this.forced, files, history: this.history }, this.config));
+  private routeTask(classification: Classification, text: string, files: string[] = this.taskFiles, keywords = true): RouteDecision {
+    return this.warm(route({ classification, text, override: this.forced, files, history: this.history, keywords }, this.config));
   }
 
   private routePlan(plan: Plan, classification: Classification): Record<string, RouteDecision> {
@@ -610,8 +623,8 @@ export class Pipeline {
     if (!end || end === startTree) return [];
     const ch: Changes | null = await this.cp.changes(startTree, end);
     if (!ch || ch.files.length === 0) return [];
-    this.undoStack.push({ prompt, start: startTree, end });
-    this.undoStack = this.undoStack.slice(-20);
+    // Kept with the conversation, so /undo and /diff still work after quitting and starting smart again here.
+    this.conv.undo = [...(this.conv.undo ?? []), { prompt, start: startTree, end }].slice(-20);
     this.bus.emit({ type: 'changes', files: ch.files.map((f) => ({ ...f, path: this.fromRoot(f.path) })), insertions: ch.insertions, deletions: ch.deletions });
     return ch.files.filter((f) => f.status !== 'D').map((f) => this.fromRoot(f.path));
   }
@@ -621,17 +634,20 @@ export class Pipeline {
     const emit = this.bus.emit.bind(this.bus);
     if (this.running) return emit({ type: 'notice', level: 'warn', message: 'Cancel the running task (Esc) before undoing.' });
     if (!this.cp.available) return emit({ type: 'notice', level: 'warn', message: 'Undo needs a git repository. Run `git init` in this directory first.' });
-    const entry = this.undoStack.pop();
+    const entry = this.conv.undo?.at(-1);
     if (!entry) return emit({ type: 'notice', level: 'info', message: 'Nothing to undo.' });
-    const now = await this.cp.snapshot();
-    const r = now ? await this.cp.restore(entry.start, now) : null;
-    if (!r) {
-      this.undoStack.push(entry);
-      return emit({ type: 'notice', level: 'warn', message: 'Could not restore the previous state.' });
-    }
-    const last = [...this.conv.tasks].reverse().find((t) => t.outcome !== 'reverted');
-    if (last) last.outcome = 'reverted';
-    this.notes.push('The user undid all of your changes from the previous task; the files are back to how they were before it. Do not assume that work exists.');
+    // Only the files this task changed: an edit you made yourself to another file since then is not the task's to revert.
+    const own = await this.cp.changes(entry.start, entry.end);
+    const now = own ? await this.cp.snapshot() : null;
+    const r = own && now ? await this.cp.restore(entry.start, now, own.files.map((f) => f.path)) : null;
+    if (!r) return emit({ type: 'notice', level: 'warn', message: 'Could not restore the previous state (the snapshot may have been cleaned up by git gc).' });
+    this.conv.undo = this.conv.undo?.slice(0, -1);
+    // The task that was undone (not simply the latest: after a restart or a question in between they differ). Memory keeps a clipped prompt.
+    const key = entry.prompt.replace(/\s+/g, ' ').trim().slice(0, 200);
+    const undone = [...this.conv.tasks].reverse().find((t) => t.outcome !== 'reverted' && t.prompt.startsWith(key));
+    if (undone) undone.outcome = 'reverted';
+    const quoted = entry.prompt.length > 80 ? `${entry.prompt.slice(0, 79)}…` : entry.prompt;
+    this.notes.push(`The user undid your file changes from the task "${quoted}"; those files are back to how they were before it. Do not assume that work exists.`);
     this.saveConversation();
     emit({ type: 'notice', level: 'info', message: `Undid "${entry.prompt.length > 50 ? `${entry.prompt.slice(0, 49)}…` : entry.prompt}": restored ${r.restored} and removed ${r.removed} file${r.restored + r.removed === 1 ? '' : 's'}.` });
   }
@@ -640,7 +656,7 @@ export class Pipeline {
   async diff(): Promise<void> {
     const emit = this.bus.emit.bind(this.bus);
     if (!this.cp.available) return emit({ type: 'notice', level: 'warn', message: 'Diff needs a git repository. Run `git init` in this directory first.' });
-    const entry = this.undoStack.at(-1);
+    const entry = this.conv.undo?.at(-1);
     if (!entry) return emit({ type: 'notice', level: 'info', message: 'No changes to show yet.' });
     const text = await this.cp.diff(entry.start, entry.end);
     emit(text ? { type: 'diff', text } : { type: 'notice', level: 'warn', message: 'Could not compute the diff.' });
@@ -813,7 +829,7 @@ export class Pipeline {
 
   private async finish(
     summary: TaskSummary,
-    f: { startedAt: string; prompt: string; touched: string[]; startTree: string | null; aborted?: boolean; doneIds?: Set<string>; keepPending?: boolean },
+    f: { startedAt: string; prompt: string; touched: string[]; startTree: string | null; aborted?: boolean; doneIds?: Set<string>; keepPending?: boolean; /** The execute stage was reached: resumable even if no step finished. */ executing?: boolean },
   ): Promise<TaskSummary> {
     const { startedAt, prompt, aborted = false } = f;
     const overhead = this.overhead;
@@ -834,7 +850,7 @@ export class Pipeline {
     }
     // A task that stopped after planning can be continued with /resume; a finished one clears that.
     if (!summary.dryRun) {
-      const unfinished = !f.keepPending && !summary.ok && summary.plan && summary.classification && summary.steps.some((x) => x.outcome !== 'skipped');
+      const unfinished = !f.keepPending && !summary.ok && summary.plan && summary.classification && (f.executing || summary.steps.some((x) => x.outcome !== 'skipped'));
       if (unfinished) {
         this.conv.pending = { prompt, classification: summary.classification!, plan: summary.plan!, doneStepIds: [...(f.doneIds ?? [])], at: startedAt };
       } else if (summary.ok && !f.keepPending) {

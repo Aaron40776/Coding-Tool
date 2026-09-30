@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SmartConfig } from './config.js';
@@ -52,18 +52,46 @@ export function isDocsOnly(files: string[]): boolean {
   });
 }
 
-export function detectChecks(cwd: string, config: SmartConfig): Check[] {
+export type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun';
+
+const LOCKFILES: [string, PackageManager][] = [['pnpm-lock.yaml', 'pnpm'], ['yarn.lock', 'yarn'], ['bun.lockb', 'bun'], ['bun.lock', 'bun']];
+const installed = new Map<string, boolean>();
+
+/** Whether a command runs on this machine (through the shell, so Windows `.cmd` shims count). Asked once per process. */
+export function hasCommand(bin: string): boolean {
+  let ok = installed.get(bin);
+  if (ok === undefined) {
+    ok = spawnSync(`${bin} --version`, { shell: true, stdio: 'ignore', timeout: 10_000, windowsHide: true }).status === 0;
+    installed.set(bin, ok);
+  }
+  return ok;
+}
+
+/**
+ * The project's package manager: package.json's `packageManager` field, else its lockfile, else npm. One that is not
+ * installed falls back to npm, which runs the same scripts.
+ */
+export function packageManager(cwd: string, pkg: { packageManager?: unknown }, has: (bin: string) => boolean = hasCommand): PackageManager {
+  const declared = typeof pkg.packageManager === 'string' ? /^(pnpm|yarn|bun|npm)@/.exec(pkg.packageManager)?.[1] as PackageManager | undefined : undefined;
+  const pm = declared ?? LOCKFILES.find(([file]) => existsSync(join(cwd, file)))?.[1] ?? 'npm';
+  return pm === 'npm' || has(pm) ? pm : 'npm';
+}
+
+const runScript = (pm: PackageManager, name: string): string => (pm === 'yarn' ? `yarn ${name}` : `${pm} run ${name}`);
+
+export function detectChecks(cwd: string, config: SmartConfig, has?: (bin: string) => boolean): Check[] {
   const { auto, commands } = config.verify;
   if (commands.length > 0) return commands.map((command) => ({ name: command, command }));
   if (!auto) return [];
   const pkgPath = join(cwd, 'package.json');
   if (!existsSync(pkgPath)) return [];
   try {
-    const scripts = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
-    return SCRIPT_ORDER.filter((name) => typeof scripts[name] === 'string' && !isPlaceholderTest(scripts[name]!)).map((name) => ({
-      name,
-      command: `npm run ${name}`,
-    }));
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string>; packageManager?: unknown };
+    const scripts = pkg.scripts ?? {};
+    const names = SCRIPT_ORDER.filter((name) => typeof scripts[name] === 'string' && !isPlaceholderTest(scripts[name]!));
+    if (names.length === 0) return [];
+    const pm = packageManager(cwd, pkg, has);
+    return names.map((name) => ({ name, command: runScript(pm, name) }));
   } catch {
     return [];
   }

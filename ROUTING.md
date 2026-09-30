@@ -7,7 +7,7 @@ To see one without running anything: `smart --rate "your task"`.
 ## The pipeline
 
 1. **Classify** (cheap model, default Haiku). Scores your prompt as one of four complexities, says whether it needs a plan and how hard it is (`easy`, `normal`, `hard`). Clearly routine one-line edits ("fix the typo in the README", "rename x to count") are recognised locally and **skip this call entirely** (the fast lane, about 5 s saved; `routing.fastLane`). Greetings ("hey", "thanks") skip it too.
-2. **Answer**, if the prompt is a pure question that needs none of your files, tools or current information. An easy one is answered by the classifier in the same call (one Haiku call in total). A question the rater finds hard (score 0.25 or more) is answered by the model and effort it picks, in one more tool-free call: still no coding session.
+2. **Answer**, if the prompt is a pure question that needs none of your files, tools or current information. An easy one is answered by the classifier in the same call (one Haiku call in total). A question the classifier does not rate easy and the rater scores 0.25 or more is answered by the model and effort it picks, in one more tool-free call: still no coding session. Keyword rules do not apply to answers (they are about doing the work: "what is a deadlock?" is not Opus work).
 3. **Plan**, only when the task needs one (a large build always does; `--no-plan` turns this off). Big builds and requests rated hard are planned by Opus (`routing.planner`); mid-size, multi-part changes by Sonnet (`routing.plannerLight`): about 2× cheaper (measured $0.016 vs $0.033 for the same plan) and somewhat faster, and plenty for a short plan. The planner also rates each step `easy`, `normal` or `hard`. Plans are kept to a few substantial steps (`limits.maxPlanSteps`, default 6), because every step is a separate Claude Code call.
 4. **Rate and route** every step: the rater (below) picks a model and an effort.
 5. **Execute** each step with a lean prompt, then **verify** it (tests, lint, build; not for docs-only changes) and **review** it. The reviewer is Haiku, or Sonnet at low effort for a step rated as hard as Opus work: a weak model cannot check work it could not do.
@@ -94,7 +94,9 @@ After a step runs, `smart` runs your checks. If they fail:
 3. if the top model also fails, the step fails and later steps are not run.
 
 Checks are auto-detected from `package.json` scripts, in cheapest-first order: `typecheck`, `lint`, `build`, `test`
-(npm's placeholder test script is ignored). Override them with `verify.commands`, for example `["pytest -q", "ruff check ."]`.
+(npm's placeholder test script is ignored). They run with the project's package manager: `packageManager` in `package.json`, else the lockfile
+(`pnpm-lock.yaml`, `yarn.lock`, `bun.lock`), else npm (also when that tool is not installed). Other languages are not guessed, because a first
+`cargo check` or `go vet` can take minutes and a timeout would count as a failed step: set `verify.commands`, for example `["pytest -q", "ruff check ."]`.
 A question that changed no files is not verified, and neither is a change that only touched prose or images (`.md`, `.txt`, `.png`, ...): there is nothing for a build or test to break. Config files such as `package.json` are still checked.
 
 ## Tuning
@@ -127,7 +129,12 @@ Copy `smart.config.example.json` to `./smart.config.json` (or `~/.smart/smart.co
 In a git repository, `smart` snapshots the project directory before and after each step using a private temporary index: your index, branches and history are never touched
 (only a few unreferenced objects are added, which `git gc` removes). That finds every changed file, including ones made by shell commands, shows a per-task summary
 (`Changed 3 files (+120 −4)`), and powers `/diff` and `/undo`. Only the directory you started `smart` in is covered, so in a monorepo a sibling package is never reverted.
+`/undo` reverts only the files the task itself changed: your own edits to other files since then are kept. The last 20 tasks are remembered per directory, so `/undo`
+and `/diff` still work after you quit and start `smart` again (unless `git gc` has since removed the snapshot).
 Not a git repo? `git init` enables it. A failed or cancelled task can be continued with `/resume` (or `smart --resume`), from its first unfinished step.
+
+**Usage limit reached**: when Claude refuses a call because your 5-hour or weekly limit is used up, `smart` stops the task at once instead of retrying or
+escalating to a bigger model (every call would be refused until the reset), says when the limit resets, and keeps the task for `/resume`.
 
 ## Permissions
 

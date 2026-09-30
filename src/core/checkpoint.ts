@@ -33,8 +33,11 @@ export interface Checkpointer {
   snapshot(): Promise<string | null>;
   changes(from: string, to: string): Promise<Changes | null>;
   diff(from: string, to: string): Promise<string | null>;
-  /** Make the working tree match `target` again (only files that differ from `current` are touched). */
-  restore(target: string, current: string): Promise<{ restored: number; removed: number } | null>;
+  /**
+   * Make the working tree match `target` again (only files that differ from `current` are touched).
+   * With `only`, just those repo-relative paths: the files one task changed, not every edit since.
+   */
+  restore(target: string, current: string, only?: string[]): Promise<{ restored: number; removed: number } | null>;
   dispose(): void;
 }
 
@@ -154,12 +157,14 @@ export class GitCheckpoints implements Checkpointer {
     return r.code === 0 ? r.stdout : null;
   }
 
-  async restore(target: string, current: string): Promise<{ restored: number; removed: number } | null> {
+  async restore(target: string, current: string, only?: string[]): Promise<{ restored: number; removed: number } | null> {
     if (!this.available) return null;
     const ch = await this.changes(target, current);
     if (!ch) return null;
-    const toWrite = ch.files.filter((f) => f.status !== 'A').map((f) => f.path); // in target, changed or deleted since
-    const toRemove = ch.files.filter((f) => f.status === 'A').map((f) => f.path); // created since the target
+    const scope = only ? new Set(only) : null;
+    const files = scope ? ch.files.filter((f) => scope.has(f.path)) : ch.files;
+    const toWrite = files.filter((f) => f.status !== 'A').map((f) => f.path); // in target, changed or deleted since
+    const toRemove = files.filter((f) => f.status === 'A').map((f) => f.path); // created since the target
     let restored = 0;
     if (toWrite.length > 0) {
       const idx = join(this.tmp, 'restore-index');
