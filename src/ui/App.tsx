@@ -173,14 +173,17 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
       setFocus((f) => order[(order.indexOf(f) + 1) % order.length] ?? 'input');
       return;
     }
+    // Page Up/Down scroll the output from anywhere on the main screen: no need to Tab to the panel first.
+    if ((key.pageUp || key.pageDown) && view === 'main') {
+      setScroll((s) => (key.pageUp ? Math.min(maxScroll.current, s + 10) : Math.max(0, s - 10)));
+      return;
+    }
     if (focus === 'plan') {
       if (key.upArrow) setSelected((s) => Math.max(0, s - 1));
       if (key.downArrow) setSelected((s) => Math.min(Math.max(0, steps - 1), s + 1));
     } else if (focus === 'output') {
       if (key.upArrow) setScroll((s) => Math.min(maxScroll.current, s + 1));
       if (key.downArrow) setScroll((s) => Math.max(0, s - 1));
-      if (key.pageUp) setScroll((s) => Math.min(maxScroll.current, s + 10));
-      if (key.pageDown) setScroll((s) => Math.max(0, s - 10));
       if (key.end) setScroll(0);
     }
   });
@@ -261,7 +264,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
             ? queued
               ? `Queued next: ${clipPrompt(queued)} · Esc cancels both`
               : 'Esc cancel · Enter queues the next task · /usage /cost /diff work meanwhile'
-            : 'Enter send · Tab panel · /stats /model /dry /new /help · Ctrl+C quit';
+            : 'Enter send · PgUp/PgDn scroll · Tab panel · /stats /model /new /help · Ctrl+C quit';
   const wide = size.cols >= 120;
 
   return (

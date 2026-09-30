@@ -10,7 +10,7 @@ with the same follow-up context, and shows what everything costs.
 
 ## Install
 
-Needs Node.js 20+ and the [Claude Code CLI](https://docs.claude.com/claude-code) on your `PATH`, logged in (run `claude` once).
+Needs Node.js 22+ and the [Claude Code CLI](https://docs.claude.com/claude-code) on your `PATH`, logged in (run `claude` once).
 
 ```sh
 git clone https://github.com/Aaron40776/Smart.git
@@ -34,7 +34,7 @@ smart --model haiku "fix the typo" # force a tier      (--no-plan skips planning
 smart -p "fix the typo" | cat      # headless (--print): reply on stdout, progress on stderr (--output-format json for scripts, --verbose for tool calls)
 smart --rate "fix the race in worker.js"  # show which model and effort it would pick, and why (calls no model)
 smart --no-review "..."            # skip the acceptance review     (--config ./my.json uses another config file)
-smart init                         # write a starter smart.config.json
+smart init                         # write a starter smart.config.json (--global: ~/.smart/, for all projects)
 ```
 
 In the app: `Enter` sends, `Esc` cancels, `Tab` switches panel, `@path` adds a file (Tab completes), `\`+`Enter` starts a new line, `↑` recalls earlier prompts.

@@ -1,20 +1,34 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
-/** Write a starter `smart.config.json` into `cwd`. Returns a message for the user; never overwrites without `force`. */
-export function initConfig(cwd: string, examplePath: string, force = false): { ok: boolean; message: string } {
-  const target = join(cwd, 'smart.config.json');
+/**
+ * What `smart init` writes: only the settings people usually change, with notes. A copy of every default would pin them
+ * all, so later improvements to the defaults would never reach you.
+ */
+export const STARTER = {
+  '//': 'Only the settings you change go here; everything else keeps smart\'s defaults (which improve with updates). Every setting: smart.config.example.json and ROUTING.md. A project\'s smart.config.json applies on top of ~/.smart/smart.config.json.',
+  routing: {
+    '//': 'optimize: cost | balanced | quality (how readily bigger models and more effort are used)',
+    optimize: 'balanced',
+  },
+  limits: {
+    '//': 'Stop a task once it has cost this many dollars (null = no limit)',
+    maxBudgetUsdPerTask: null,
+  },
+  runner: {
+    '//': 'bypassPermissions lets steps run any command; acceptEdits is stricter',
+    permissionMode: 'bypassPermissions',
+  },
+};
+
+/** Write a starter config to `target`. Returns a message for the user; never overwrites without `force`. */
+export function initConfig(target: string, force = false): { ok: boolean; message: string } {
   if (existsSync(target) && !force) return { ok: false, message: `${target} already exists. Use \`smart init --force\` to overwrite it.` };
-  let body: string;
   try {
-    body = readFileSync(examplePath, 'utf8');
-  } catch {
-    return { ok: false, message: `Could not read the example config at ${examplePath}.` };
-  }
-  try {
-    writeFileSync(target, body);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, `${JSON.stringify(STARTER, null, 2)}\n`);
   } catch (e) {
     return { ok: false, message: `Could not write ${target}: ${(e as Error).message}` };
   }
-  return { ok: true, message: `Created ${target}. Edit it to change models, routing rules, review, budgets and more (see ROUTING.md).` };
+  return { ok: true, message: `Created ${target}. It holds only a few settings; add any others you want to change (see ROUTING.md).` };
 }

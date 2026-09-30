@@ -135,7 +135,7 @@ export interface RunStepOptions extends Omit<StepPromptInput, 'fileContext'> {
   session?: { id: string; resume: boolean };
   effort?: string;
   onOutput?: (kind: 'text' | 'tool', text: string) => void;
-  onProgress?: (p: { inputTokens: number; outputTokens: number; cacheReadTokens: number }) => void;
+  onProgress?: (p: { inputTokens: number; outputTokens: number; cacheReadTokens: number; contextTokens?: number }) => void;
 }
 
 export interface StepRunResult {

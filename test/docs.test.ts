@@ -115,8 +115,8 @@ describe('commands and flags', () => {
 
   it('the README says how to install and which Node version is needed', () => {
     expect(docs['README.md']).toContain('npm run build');
-    expect(docs['README.md']).toMatch(/Node\.js 20/);
-    expect(JSON.parse(read('package.json')).engines.node).toBe('>=20');
+    expect(docs['README.md']).toMatch(/Node\.js 22/);
+    expect(JSON.parse(read('package.json')).engines.node).toBe('>=22');
   });
 });
 

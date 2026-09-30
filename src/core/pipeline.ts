@@ -23,7 +23,7 @@ import type { StepOutcome, StepRecord, TaskRecord, Tracker } from './store/track
 import { addUsage, emptyUsage, type Classification, type Limits, type ModelTier, type Plan, type PlanStep, type RouteDecision, type Usage } from './types.js';
 import { LimitsStore } from './store/limits.js';
 import { applyLimitPressure, fmtReset, pct, tightest, windowLabel } from './usage.js';
-import { detectChecks, isDocsOnly, nextAttempt, runChecks, type ExecFn } from './verifier.js';
+import { detectChecks, isDocsOnly, nextAttempt, runChecks, type Check, type ExecFn } from './verifier.js';
 
 export interface PipelineDeps {
   run: RunClaudeFn;
@@ -84,6 +84,8 @@ export class Pipeline {
   private notes: string[] = [];
   private permOverride: string | null = null;
   private warnedNoGit = false;
+  /** Said once per session that tests wait for the last plan step. */
+  private deferredTestsNoted = false;
   private readonly cp: Checkpointer;
   private limits: Limits | null;
   private warnedWindows = new Set<string>();
@@ -273,6 +275,7 @@ export class Pipeline {
       this.bgSnapshot = snapshotting;
       const signal = this.ctl.signal;
 
+      if (!dryRun) this.rotateLargeSession();
       const resumed = opts.resume ? this.conv.pending : undefined;
       let classification: Classification;
       let plan: Plan;
@@ -291,14 +294,15 @@ export class Pipeline {
       } else {
         // 1. classify
         at('classify');
-        // Clearly routine edits skip the classifier round trip altogether.
-        const fast = fastClassify(prompt, this.config);
+        // Clearly routine edits skip the classifier round trip altogether, and so does a task whose model is forced with planning
+        // off: nothing the classifier says would change what runs (the text alone still sets the effort).
+        const fast = fastClassify(prompt, this.config) ?? (this.forced && opts.noPlan ? forcedClassification(this.forced) : null);
         const c = fast ? { classification: fast, usage: emptyUsage() } : await classify(prompt, { config: this.config, cwd: this.cwd, run: this.run, signal, memory });
         this.addCallUsage(c.usage);
         classification = c.classification;
         summary.classification = classification;
         emit({ type: 'classified', classification, route: this.routeTask(classification, prompt) });
-        if (classification.fallback) emit({ type: 'notice', level: 'warn', message: classification.reason });
+        if (classification.fallback && !fast) emit({ type: 'notice', level: 'warn', message: classification.reason });
         stage('classify', 'done');
 
         // A pure question the classifier could answer on the spot needs no coding session: one call in total.
@@ -522,6 +526,23 @@ export class Pipeline {
     }
   }
 
+  /**
+   * A Claude Code session that has grown big makes every later step expensive: each turn re-reads all of it. Past
+   * `session.maxContextTokens` the next task starts a fresh session, and the first step gets the compact summary of the
+   * conversation instead (the same memory used when a saved session is lost).
+   */
+  private rotateLargeSession(): void {
+    const max = this.config.session.maxContextTokens;
+    const size = this.conv.contextTokens ?? 0;
+    if (!max || !this.conv.sessionId || size < max) return;
+    this.conv.sessionId = null;
+    this.conv.contextTokens = 0;
+    this.bus.emit({
+      type: 'notice', level: 'info',
+      message: `Starting a fresh Claude Code session: the last one had grown to about ${Math.round(size / 1000)}k tokens, which every step re-reads. A summary of this conversation carries over (session.maxContextTokens).`,
+    });
+  }
+
   /** "Your Claude usage limit is reached: … (resets in 2h 14m)" using the reset time Claude gave, or the last one it reported. */
   private limitMessage(err: SmartError): string {
     const resetsAt = err.resetsAt ?? tightest(this.limits, this.now())?.window.resetsAt;
@@ -597,6 +618,22 @@ export class Pipeline {
     if (!this.config.review.enabled || c.complexity === 'trivial' || files.length === 0) return false;
     if (planSteps <= 1 && c.complexity === 'small_edit' && c.difficulty === 'easy') return false;
     return planSteps > 1 || checks === 0;
+  }
+
+  /**
+   * The checks after one step. A test suite is often the slow part, so in a plan the steps before the last get the quick
+   * checks (typecheck, lint, build) and the last step also the tests: what an earlier step broke still fails there and is
+   * fixed before the task counts as done. Your own `verify.commands` always all run.
+   */
+  private checksFor(lastStep: boolean): Check[] {
+    const all = detectChecks(this.cwd, this.config);
+    if (lastStep || this.config.verify.testEveryStep || this.config.verify.commands.length > 0) return all;
+    const quick = all.filter((c) => c.name !== 'test');
+    if (quick.length < all.length && !this.deferredTestsNoted) {
+      this.deferredTestsNoted = true;
+      this.bus.emit({ type: 'notice', level: 'info', message: 'Tests run after the last step; earlier steps get the quicker checks (verify.testEveryStep: true runs them every step).' });
+    }
+    return quick;
   }
 
   /** Returns a description of the problems, or undefined when the step passes (or could not be reviewed). */
@@ -730,6 +767,7 @@ export class Pipeline {
       const note = index === 0 ? this.notes.join(' ') : '';
 
       let ok = false;
+      let context = 0;
       try {
         const res = await runStep({
           plan, step, index, total, touchedFiles: touched, failure, memory: memory || undefined, note: note || undefined, referenced: index === 0 ? a.referenced : undefined,
@@ -740,11 +778,14 @@ export class Pipeline {
             if (kind === 'text') this.lastReply = text;
             emit({ type: 'step:output', stepId: step.id, kind, text });
           },
-          onProgress: (p) => emit({
-            type: 'tokens', stepId: step.id,
-            usage: { ...emptyUsage(), inputTokens: p.inputTokens, outputTokens: p.outputTokens, cacheReadTokens: p.cacheReadTokens },
-            sessionTotal: addUsage(this.sessionTotal, { ...emptyUsage(), inputTokens: p.inputTokens, outputTokens: p.outputTokens }),
-          }),
+          onProgress: (p) => {
+            context = p.contextTokens ?? context;
+            emit({
+              type: 'tokens', stepId: step.id,
+              usage: { ...emptyUsage(), inputTokens: p.inputTokens, outputTokens: p.outputTokens, cacheReadTokens: p.cacheReadTokens },
+              sessionTotal: addUsage(this.sessionTotal, { ...emptyUsage(), inputTokens: p.inputTokens, outputTokens: p.outputTokens }),
+            });
+          },
         });
         if (res.text.trim()) this.lastReply = res.text; // the final message is authoritative for follow-up memory
         rec.usage = addUsage(rec.usage, res.usage);
@@ -758,7 +799,10 @@ export class Pipeline {
         const stepFiles = [...new Set([...changedNow, ...res.touched])];
         for (const f of stepFiles) if (!touched.includes(f)) touched.push(f);
         if (after) a.cursor.tree = after;
-        if (sessionId) this.conv.sessionId = sessionId;
+        if (sessionId) {
+          this.conv.sessionId = sessionId;
+          if (context > 0) this.conv.contextTokens = context;
+        }
         this.conv.lastTier = tier;
         this.conv.lastCallAt = this.now();
         this.conv.lastCallAtByTier = { ...this.conv.lastCallAtByTier, [tier]: this.conv.lastCallAt };
@@ -766,7 +810,7 @@ export class Pipeline {
         // verify
         // Nothing to check when no file changed for a question, or when only prose and images changed.
         const skipVerify = (classification.complexity === 'trivial' && stepFiles.length === 0) || isDocsOnly(stepFiles);
-        const checks = skipVerify ? [] : detectChecks(this.cwd, this.config);
+        const checks = skipVerify ? [] : this.checksFor(index === total - 1);
         if (checks.length > 0) a.current('verify');
         const v = await runChecks(checks, {
           cwd: this.cwd, config: this.config, exec: this.deps.exec, signal,
@@ -794,6 +838,7 @@ export class Pipeline {
         // The saved Claude Code session is gone (cleaned up, other machine): start a new one, carrying our memory.
         if (e instanceof SmartError && e.kind === 'claude' && resuming && /No conversation found/i.test(e.message)) {
           this.conv.sessionId = null;
+          this.conv.contextTokens = 0;
           emit({ type: 'notice', level: 'warn', message: 'The previous Claude Code session was not found; starting a new one with a summary of the conversation.' });
           rec.attempts -= 1;
           continue;
@@ -879,6 +924,11 @@ export class Pipeline {
     return summary;
   }
 }
+
+/** Model forced and planning off: no classifier call. `fallback` makes the rater use the local signals alone. */
+const forcedClassification = (tier: ModelTier): Classification => ({
+  complexity: 'multi_file', needsPlan: false, fallback: true, reason: `Model forced to ${tier} and planning off: no classifier call.`,
+});
 
 const skippedRecord = (s: PlanStep): StepRecord => ({
   stepId: s.id, title: s.title, model: '-', tier: '-', attempts: 0, escalated: false, usage: emptyUsage(), outcome: 'skipped' as StepOutcome,
