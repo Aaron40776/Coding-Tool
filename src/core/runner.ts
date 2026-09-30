@@ -1,5 +1,5 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const slash = (p: string): string => p.split(sep).join('/');
 import type { ClaudeStreamEvent, RunClaudeFn } from './claude.js';
@@ -63,6 +63,19 @@ export function gatherFiles(cwd: string, files: string[], maxBytes: number): Fil
   return out;
 }
 
+/** The real path of `p`, or of its folder when the file itself is gone (deleted by the step), else `p` unchanged. */
+function realPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    try {
+      return join(realpathSync(dirname(p)), basename(p));
+    } catch {
+      return p;
+    }
+  }
+}
+
 /**
  * A project-relative path for a file Claude Code reports. It reports real paths, so when the project sits under a
  * symlink (macOS /tmp, a junction, a Windows 8.3 name) the plain relative path starts with `../..`: compare against the real root then.
@@ -71,7 +84,8 @@ export function projectRelative(cwd: string, file: string): string {
   const plain = relative(cwd, resolve(cwd, file));
   if (plain !== '' && !plain.startsWith('..')) return slash(plain);
   try {
-    const viaReal = relative(realpathSync(cwd), resolve(cwd, file));
+    // Resolve both sides: the file's own path can pass through a symlink too (macOS: /var is /private/var).
+    const viaReal = relative(realpathSync(cwd), realPath(resolve(cwd, file)));
     if (viaReal !== '' && !viaReal.startsWith('..') && !isAbsolute(viaReal)) return slash(viaReal);
   } catch {
     /* fall through */
