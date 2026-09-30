@@ -12,6 +12,7 @@ import { projectContext, projectFiles } from './files.js';
 import { resolveMentions } from './mentions.js';
 import { describeConfig } from './describe.js';
 import { answerEffort, effortFor, planEffort } from './effort.js';
+import { buildCostTable, estimateStep, type CostTable, type StepEstimate } from './rating/estimate.js';
 import { buildHistory, type History } from './rating/learn.js';
 import { effortAt, rateTask } from './rating/rate.js';
 import { ANSWER_SYSTEM, CHAT_SYSTEM, isSmallTalk } from './smalltalk.js';
@@ -97,6 +98,12 @@ export class Pipeline {
   private leanOk = true;
   /** How each rung has fared on your recent steps; the rater nudges towards what worked. Refreshed at the start of every task. */
   private history: History | undefined;
+  /** The last task written to your history, for /good and /bad. */
+  private lastTaskId: { id: string; steps: StepRecord[] } | null = null;
+  /** Typical cost per model and effort from your history (see previewStep). */
+  private costTable: CostTable | undefined;
+  /** The classification of the task whose plan is on screen. */
+  private planClassification: Classification | null = null;
   /** Files the current request refers to with @path: they count towards how big the work is. */
   private taskFiles: string[] = [];
   /** The task currently running, so a shutdown can wait for its state to be saved (see `settle`). */
@@ -309,6 +316,7 @@ export class Pipeline {
         for (const st of ['classify', 'plan', 'approve'] as const) stage(st, 'skipped');
         const left = plan.steps.filter((x) => !x.skipped && !doneIds.has(x.id)).length;
         emit({ type: 'notice', level: 'info', message: `Resuming: ${doneIds.size} step${doneIds.size === 1 ? '' : 's'} already done, ${left} to go.` });
+        this.planClassification = classification;
         emit({ type: 'plan:ready', plan, routes: this.routePlan(plan, classification), done: [...doneIds] });
         emit({ type: 'plan:approved', plan });
       } else {
@@ -357,6 +365,7 @@ export class Pipeline {
           stage('plan', 'skipped');
         }
         summary.plan = plan;
+        this.planClassification = classification;
         emit({ type: 'plan:ready', plan, routes: this.routePlan(plan, classification) });
 
         if (dryRun) {
@@ -590,12 +599,25 @@ export class Pipeline {
     if (err) this.bus.emit({ type: 'notice', level: 'warn', message: err });
   }
 
+  /** What learning and the cost estimate need from your history, read once per task. */
   private loadHistory(): History | undefined {
     try {
-      return this.deps.tracker ? buildHistory(this.deps.tracker.load()) : undefined;
+      const tasks = this.deps.tracker?.load() ?? [];
+      this.costTable = buildCostTable(tasks);
+      return this.deps.tracker ? buildHistory(tasks) : undefined;
     } catch {
       return undefined; // learning is a bonus: never let it stop a task
     }
+  }
+
+  /**
+   * The model, effort and likely cost of a plan step as it stands now: the approval screen asks again after every edit, so
+   * the badges and the estimate follow your changes (a model you pick, instructions you rewrite).
+   */
+  previewStep(plan: Plan, step: PlanStep): { route: RouteDecision; estimate: StepEstimate } {
+    const classification = this.planClassification ?? { complexity: 'multi_file', needsPlan: true, reason: '' };
+    const route = this.routeStep(step, classification, this.inPlan(plan, step));
+    return { route, estimate: estimateStep(route, this.costTable) };
   }
 
   private routeTask(classification: Classification, text: string, files: string[] = this.taskFiles, keywords = true): RouteDecision {
@@ -718,6 +740,22 @@ export class Pipeline {
     this.conv.undo = [...(this.conv.undo ?? []), { prompt, start: startTree, end }].slice(-20);
     this.bus.emit({ type: 'changes', files: ch.files.map((f) => ({ ...f, path: this.fromRoot(f.path) })), insertions: ch.insertions, deletions: ch.deletions });
     return ch.files.filter((f) => f.status !== 'D').map((f) => this.fromRoot(f.path));
+  }
+
+  /** `/good` and `/bad`: your verdict on the last task. It feeds the learning, so a model that keeps getting it wrong for you is used less. */
+  rateLast(feedback: 'good' | 'bad'): void {
+    const emit = this.bus.emit.bind(this.bus);
+    const last = this.lastTaskId;
+    if (!last || !this.deps.tracker) return emit({ type: 'notice', level: 'info', message: 'No finished task to rate yet in this session.' });
+    const err = this.deps.tracker.setFeedback(last.id, feedback);
+    if (err) return emit({ type: 'notice', level: 'warn', message: err });
+    const rungs = [...new Set(last.steps.filter((s) => s.rated).map((s) => `${s.rated!.tier}${s.rated!.effort ? ` · ${s.rated!.effort}` : ''}`))].join(', ');
+    emit({
+      type: 'notice', level: 'info',
+      message: feedback === 'good'
+        ? `Thanks. Noted as good${rungs ? ` (${rungs})` : ''}.`
+        : `Noted as wrong${rungs ? `: it counts against ${rungs} for similar work` : ''}, so smart leans to a stronger model or more effort there. /undo reverts its changes.`,
+    });
   }
 
   /** Revert the working tree to how it was before the most recent task that changed files. */
@@ -972,6 +1010,7 @@ export class Pipeline {
         steps: summary.steps, totals: summary.totals, ok: summary.ok,
       };
       const err = this.deps.tracker.append(record);
+      if (!err) this.lastTaskId = { id: summary.taskId, steps: summary.steps };
       if (err) this.bus.emit({ type: 'notice', level: 'warn', message: err });
     }
     // The task is over for callers from here on: a frontend that reacts to the terminal event below may start the next one at once.

@@ -42,6 +42,34 @@ function walk(root: string, rel: string, depth: number, limit: number): string[]
   return out.slice(0, limit);
 }
 
+/**
+ * The files in one folder of the project (git's view: tracked plus untracked-not-ignored; else a walk), relative to `cwd`,
+ * for an `@folder/` mention. Stops at `limit`.
+ */
+export function folderFiles(cwd: string, folder: string, limit = 150): { files: string[]; more: boolean } {
+  const rel = folder.replace(/[\\/]+$/, '');
+  let all: string[];
+  try {
+    const out = execFileSync('git', ['-c', 'core.quotepath=false', 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', rel], {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, maxBuffer: 4 * 1024 * 1024,
+    });
+    all = out.split('\0').filter((f) => f && !f.split('/').some((part) => SKIP.has(part)));
+  } catch {
+    all = walk(cwd, rel.replace(/\\/g, '/'), 4, limit + 1);
+  }
+  return { files: all.slice(0, limit), more: all.length > limit };
+}
+
+/** Every folder that holds one of `files`, as `dir/`, for @ completion. */
+export function foldersOf(files: string[]): string[] {
+  const dirs = new Set<string>();
+  for (const f of files) {
+    const parts = f.split('/');
+    for (let i = 1; i < parts.length; i++) dirs.add(`${parts.slice(0, i).join('/')}/`);
+  }
+  return [...dirs];
+}
+
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}\n[truncated]` : s);
 
 /**

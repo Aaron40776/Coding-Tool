@@ -335,7 +335,7 @@ describe('input features', () => {
   });
 
   it('matchCommands suggests by prefix only for a bare slash word', () => {
-    expect(matchCommands('/')).toEqual(['/stats', '/usage', '/cost', '/config', '/model', '/dry', '/new', '/undo', '/diff', '/resume', '/mode', '/help', '/quit']);
+    expect(matchCommands('/')).toEqual(['/stats', '/usage', '/cost', '/config', '/model', '/dry', '/new', '/undo', '/diff', '/resume', '/good', '/bad', '/mode', '/help', '/quit']);
     expect(matchCommands('/c')).toEqual(['/cost', '/config']);
     expect(matchCommands('/d')).toEqual(['/dry', '/diff']);
     expect(matchCommands('/st')).toEqual(['/stats']);

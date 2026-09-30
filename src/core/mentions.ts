@@ -1,3 +1,6 @@
+import { realpathSync, statSync } from 'node:fs';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { folderFiles } from './files.js';
 import { gatherFiles, type FileContext } from './runner.js';
 
 const PAIRS: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
@@ -24,8 +27,38 @@ export function extractMentions(prompt: string): string[] {
   return out;
 }
 
-/** Contents of the project files the user referenced with @path (only real files inside the project, within the byte budget). */
+/** A folder inside the project (a symlink out of it, or a path outside, is not). */
+function projectFolder(cwd: string, p: string): string | null {
+  try {
+    const root = realpathSync(cwd);
+    const real = realpathSync(resolve(cwd, p));
+    const rel = relative(root, real);
+    if (rel.startsWith('..') || isAbsolute(rel) || !statSync(real).isDirectory()) return null;
+    return rel.split(sep).join('/');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What the user referenced with @path: a file's contents (only real files inside the project, within the byte budget), or
+ * for `@folder/` the list of its files, so the model knows what is there and reads what it needs.
+ */
 export function resolveMentions(cwd: string, prompt: string, maxBytes: number): FileContext[] {
   const paths = extractMentions(prompt);
-  return paths.length ? gatherFiles(cwd, paths, maxBytes) : [];
+  if (!paths.length) return [];
+  const folders: FileContext[] = [];
+  const files: string[] = [];
+  for (const p of paths) {
+    const folder = projectFolder(cwd, p);
+    if (folder === null) {
+      files.push(p);
+      continue;
+    }
+    const { files: inside, more } = folderFiles(cwd, folder || '.');
+    const name = folder ? `${folder}/` : './';
+    folders.push({ path: name, content: `Folder ${name}: ${inside.length}${more ? '+' : ''} file${inside.length === 1 ? '' : 's'}\n${inside.join('\n')}`, truncated: more });
+  }
+  const used = folders.reduce((n, f) => n + f.content.length, 0);
+  return [...folders, ...gatherFiles(cwd, files, Math.max(0, maxBytes - used))];
 }

@@ -28,6 +28,8 @@ export interface TaskRecord {
   steps: StepRecord[];
   totals: Usage;
   ok: boolean;
+  /** Your verdict with /good or /bad: whether the result was right, beyond passing its checks. */
+  feedback?: 'good' | 'bad';
 }
 
 interface HistoryFile {
@@ -62,6 +64,25 @@ export class Tracker {
     } catch {
       quarantineCorrupt(this.path); // keep it for inspection and start fresh rather than crash
       return [];
+    }
+  }
+
+  /** Records /good or /bad on a task. Returns an error message, or null when saved. */
+  setFeedback(id: string, feedback: 'good' | 'bad'): string | null {
+    try {
+      let found = false;
+      withFileLock(this.path, () => {
+        const tasks = this.load();
+        const task = tasks.find((t) => t.id === id);
+        if (!task) return;
+        found = true;
+        task.feedback = feedback;
+        writeFileAtomic(this.path, JSON.stringify({ version: 1, tasks } satisfies HistoryFile));
+        this.cache = null;
+      });
+      return found ? null : 'That task is not in your history (it cost nothing, or the history was cleared).';
+    } catch (e) {
+      return `Could not write history to ${this.path}: ${(e as Error).message}`;
     }
   }
 
