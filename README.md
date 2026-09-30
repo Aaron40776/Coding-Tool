@@ -17,7 +17,7 @@ irm https://raw.githubusercontent.com/Aaron40776/Smart/main/install.ps1 | iex
 ```
 
 That clones smart into `%USERPROFILE%\Smart` (`$env:SMART_DIR` picks another folder), builds it and puts `smart` on your `PATH`. **Update** any time with `smart update`.
-By hand instead: `git clone https://github.com/Aaron40776/Smart.git`, then in `Smart` run `npm install`, `npm run build` and `npm link`.
+By hand instead: `git clone https://github.com/Aaron40776/Smart.git`, then in `Smart` run `npm ci`, `npm run build` and `npm link`.
 If scripts are blocked, run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once.
 If `claude` is not found, set its full path: `$env:SMART_CLAUDE_BIN = "C:\path\to\claude.exe"`.
 

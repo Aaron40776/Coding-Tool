@@ -85,17 +85,17 @@ describe('smart update', () => {
     const lines: string[] = [];
     const exec: RunCommand = (cmd, args, cwd) => {
       ran.push(`${cmd} ${args.join(' ')} @${cwd === root}`);
-      if (cmd === 'git') writeFileSync(join(root, 'package.json'), JSON.stringify({ version: '0.4.0' })); // the pull brought a new version
+      if (args[0] === 'pull') writeFileSync(join(root, 'package.json'), JSON.stringify({ version: '0.4.0' })); // the pull brought a new version
       return 0;
     };
     expect(updateSmart(root, exec, (l) => lines.push(l))).toBe(0);
-    expect(ran).toEqual(['git pull --ff-only @true', 'npm install @true', 'npm run build @true']);
+    expect(ran).toEqual(['git checkout -- package-lock.json @true', 'git pull --ff-only @true', 'npm ci @true', 'npm run build @true']);
     expect(lines.at(-1)).toBe('Updated smart 0.3.0 → 0.4.0. See CHANGELOG.md for what changed.');
   });
 
   it('stops at the first failing step and says what to do', () => {
     const lines: string[] = [];
-    const exec: RunCommand = (cmd) => (cmd === 'git' ? 1 : 0);
+    const exec: RunCommand = (cmd, args) => (args[0] === 'pull' ? 1 : 0);
     expect(updateSmart(clone(), exec, (l) => lines.push(l))).toBe(1);
     expect(lines.at(-1)).toMatch(/git pull --ff-only` failed.*git stash/);
   });

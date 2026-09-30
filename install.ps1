@@ -30,6 +30,8 @@
 
     if (Test-Path (Join-Path $dir '.git')) {
         Say "Updating $dir"
+        # Older versions ran `npm install`, which can rewrite package-lock.json and block the pull: put it back first.
+        git -C $dir checkout -- package-lock.json
         git -C $dir pull --ff-only
     } else {
         Say "Downloading into $dir"
@@ -42,8 +44,9 @@
 
     Push-Location $dir
     try {
-        # npm.cmd, not npm: the npm.ps1 shim is blocked where scripts are disabled.
-        foreach ($step in @(@('install'), @('run', 'build'), @('link'))) {
+        # npm.cmd, not npm: the npm.ps1 shim is blocked where scripts are disabled. `ci` installs exactly what
+        # package-lock.json says and never rewrites it, so the next update's `git pull` is not blocked.
+        foreach ($step in @(@('ci'), @('run', 'build'), @('link'))) {
             Say "npm $($step -join ' ')"
             & npm.cmd @step
             if ($LASTEXITCODE -ne 0) {

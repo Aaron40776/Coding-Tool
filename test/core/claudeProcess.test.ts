@@ -13,14 +13,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function setup(opts: { idleMs?: number } = {}) {
+function setup(opts: { idleMs?: number; firstOutputMs?: number; controlMs?: number } = {}) {
   let spawns = 0;
   const oneShot = vi.fn<RunClaudeFn>(async (): Promise<ClaudeResult> => ({ isError: false, subtype: 'success', text: 'one-shot', structured: undefined, usage: { ...emptyUsage(), costUsd: 0.5 }, sessionId: 's', numTurns: 1 }));
   const spawnImpl = ((...a: Parameters<typeof spawn>) => {
     spawns += 1;
     return spawn(...a);
   }) as typeof spawn;
-  const run = createClaudeRunner({ keepAlive: true, command, spawnImpl, oneShot, idleMs: opts.idleMs });
+  const run = createClaudeRunner({ keepAlive: true, command, spawnImpl, oneShot, idleMs: opts.idleMs, firstOutputMs: opts.firstOutputMs, controlMs: opts.controlMs });
   runners.push(run);
   return { run, oneShot, spawns: () => spawns };
 }
@@ -107,5 +107,25 @@ describe('kept-alive claude process', () => {
     await new Promise((r) => setTimeout(r, 400));
     await t.run(step());
     expect(t.spawns()).toBe(2);
+  });
+
+  it('a process that never answers is given up after a while and the call runs the classic way', async () => {
+    vi.stubEnv('FAKE_SILENT', '1');
+    const t = setup({ firstOutputMs: 300 });
+    const r = await t.run(step());
+    expect(r.text).toBe('one-shot');
+    expect(t.oneShot).toHaveBeenCalledTimes(1);
+  });
+
+  it('a model switch that is refused or never confirmed moves to a fresh process on the new model', async () => {
+    for (const mode of ['refuse', 'ignore']) {
+      vi.stubEnv('FAKE_CONTROL', mode);
+      const t = setup({ controlMs: 300 });
+      await t.run(step());
+      const b = await t.run(step({ model: 'opus', session: { id: 'sess-1', resume: true } }));
+      expect(b.text).toBe('reply 1 from opus');
+      expect(t.spawns()).toBe(2);
+      expect(t.oneShot).not.toHaveBeenCalled();
+    }
   });
 });

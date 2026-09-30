@@ -16,9 +16,12 @@ const versionIn = (root: string): string => {
   }
 };
 
+// `npm ci` installs exactly what package-lock.json says and never rewrites it. Earlier versions ran `npm install`, which
+// can rewrite the lockfile and then block `git pull --ff-only`, so a lockfile changed that way is put back first.
 const STEPS: { cmd: string; args: string[]; hint: string }[] = [
+  { cmd: 'git', args: ['checkout', '--', 'package-lock.json'], hint: 'Check that the folder is a clone of https://github.com/Aaron40776/Smart, then run `smart update` again.' },
   { cmd: 'git', args: ['pull', '--ff-only'], hint: 'If you changed files in this folder, commit or undo them (`git stash`), then run `smart update` again.' },
-  { cmd: 'npm', args: ['install'], hint: 'Check your internet connection, then run `smart update` again.' },
+  { cmd: 'npm', args: ['ci'], hint: 'Check your internet connection, then run `smart update` again.' },
   { cmd: 'npm', args: ['run', 'build'], hint: 'Please report this at https://github.com/Aaron40776/Smart/issues with the output above.' },
 ];
 

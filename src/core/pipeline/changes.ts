@@ -87,7 +87,7 @@ export class ChangeTracker {
     const quoted = entry.prompt.length > 80 ? `${entry.prompt.slice(0, 79)}…` : entry.prompt;
     this.h.note(`The user undid your file changes from the task "${quoted}"; those files are back to how they were before it. Do not assume that work exists.`);
     this.h.saveConversation();
-    emit({ type: 'notice', level: 'info', message: `Undid "${entry.prompt.length > 50 ? `${entry.prompt.slice(0, 49)}…` : entry.prompt}": restored ${r.restored} and removed ${r.removed} file${r.restored + r.removed === 1 ? '' : 's'}.` });
+    emit({ type: 'notice', level: 'info', message: `Undid "${entry.prompt.length > 50 ? `${entry.prompt.slice(0, 49)}…` : entry.prompt}": ${undoSummary(r.restored, r.removed)}.` });
   }
 
   /** Publish a unified diff of the most recent task that changed files. */
@@ -99,4 +99,11 @@ export class ChangeTracker {
     const text = await this.h.cp.diff(entry.start, entry.end);
     emit(text ? { type: 'diff', text } : { type: 'notice', level: 'warn', message: 'Could not compute the diff.' });
   }
+}
+
+const files = (n: number) => `${n} file${n === 1 ? '' : 's'}`;
+/** "restored 2 files", "removed 1 file", or both. */
+export function undoSummary(restored: number, removed: number): string {
+  const parts = [restored ? `restored ${files(restored)}` : '', removed ? `removed ${files(removed)}` : ''].filter(Boolean);
+  return parts.length ? parts.join(' and ') : 'no files needed changing';
 }
