@@ -577,10 +577,12 @@ export class Pipeline {
 
   /**
    * The reviewer is the quality gate that works without tests: every plan step is reviewed, and a single-step
-   * task is reviewed when no automated check ran. Questions, and steps that changed no files, are not.
+   * task is reviewed when no automated check ran. Questions, steps that changed no files, and a lone edit rated easy
+   * (a typo, a rename: no acceptance criteria to check, and the review call took longer than the edit) are not.
    */
   private shouldReview(c: Classification, planSteps: number, checks: number, files: string[]): boolean {
     if (!this.config.review.enabled || c.complexity === 'trivial' || files.length === 0) return false;
+    if (planSteps <= 1 && c.complexity === 'small_edit' && c.difficulty === 'easy') return false;
     return planSteps > 1 || checks === 0;
   }
 

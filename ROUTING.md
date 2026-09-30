@@ -75,7 +75,7 @@ Set `session.keepWarmTier: false` to disable.
 ## Review: a quality gate that works without tests
 
 Automated checks (below) only exist when the project has them. So after every plan step, `smart` also asks a cheap reviewer model (`routing.reviewer`,
-default `haiku`) whether the step's **acceptance criteria** are met by the files it changed. Single-step tasks are reviewed only when no check ran.
+default `haiku`) whether the step's **acceptance criteria** are met by the files it changed. Single-step tasks are reviewed only when no check ran, and never when the edit is rated easy (a typo or rename: the review call took longer than the edit itself, 11.6 s vs 9.3 s in a live run).
 The reviewer is told to fail only for concrete, verifiable problems (unmet criterion, syntax error, missing function), never for style. A "fail" feeds
 the same retry-then-escalate loop as a failing test. It costs a few cents per step; set `review.enabled: false` to skip it, or `routing.reviewer: "sonnet"` for a stricter one.
 

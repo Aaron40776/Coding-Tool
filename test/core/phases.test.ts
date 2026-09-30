@@ -130,4 +130,13 @@ describe('reviewing', () => {
     await t.pipeline.runTask('build a job runner', { autoApprove: true });
     expect(t.calls.filter((c) => c.role === 'reviewer').map((c) => [c.model, c.effort])).toEqual([['haiku', undefined], ['sonnet', 'low']]);
   });
+
+  it('a lone edit rated easy is not reviewed (nothing to check, and the call takes longer than the edit); a normal one is', async () => {
+    const easy = setup({ classifier: { complexity: 'small_edit', difficulty: 'easy' }, changedFile: 'src/a.ts' });
+    await easy.pipeline.runTask('make the parser handle empty input');
+    expect(easy.calls.map((c) => c.role)).toEqual(['classifier', 'executor']);
+    const normal = setup({ classifier: { complexity: 'small_edit', difficulty: 'normal' }, changedFile: 'src/a.ts' });
+    await normal.pipeline.runTask('make the parser handle empty input');
+    expect(normal.calls.map((c) => c.role)).toEqual(['classifier', 'executor', 'reviewer']);
+  });
 });
