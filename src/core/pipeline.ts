@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
 import type { RunClaudeFn } from './claude.js';
 import { resolvePermissionMode } from './claude.js';
-import { NoCheckpoints, type Changes, type Checkpointer } from './checkpoint.js';
+import { NoCheckpoints, type Checkpointer } from './checkpoint.js';
 import { classify, fastClassify } from './classifier.js';
 import type { SmartConfig } from './config.js';
 import { newConversation, recordTask, renderMemory, type Conversation, type ConversationStore, type PendingTask } from './store/conversation.js';
@@ -17,14 +16,18 @@ import { buildHistory, type History } from './rating/learn.js';
 import { effortAt, rateTask } from './rating/rate.js';
 import { ANSWER_SYSTEM, CHAT_SYSTEM, isSmallTalk } from './smalltalk.js';
 import { makePlan, singleStepPlan } from './planner.js';
-import { ANSWER_UPGRADE_SCORE, applyWarmCache, plannerTier, route, routeRole, reviewerTier } from './router.js';
+import { ANSWER_UPGRADE_SCORE, route, routeRole, reviewerTier } from './router.js';
 import { reviewStep } from './review.js';
 import { gatherFiles, runStep } from './runner.js';
-import type { StepOutcome, StepRecord, TaskRecord, Tracker } from './store/tracker.js';
+import type { StepRecord, TaskRecord, Tracker } from './store/tracker.js';
 import { addUsage, emptyUsage, type Classification, type Limits, type ModelTier, type Plan, type PlanStep, type RouteDecision, type Usage } from './types.js';
 import { LimitsStore } from './store/limits.js';
-import { applyLimitPressure, fmtReset, pct, tightest, windowLabel } from './usage.js';
 import { detectChecks, isDocsOnly, nextAttempt, runChecks, type Check, type ExecFn } from './verifier.js';
+import { makeRun } from './pipeline/calls.js';
+import { ChangeTracker } from './pipeline/changes.js';
+import { AccountLimits } from './pipeline/limits.js';
+import { plannerDownshift, routeWithSession, sessionTooBig } from './pipeline/session.js';
+import { forcedClassification, selectChecks, shouldReview, skippedRecord, stepBudget } from './pipeline/steps.js';
 
 export interface PipelineDeps {
   run: RunClaudeFn;
@@ -87,15 +90,11 @@ export class Pipeline {
   private notes: string[] = [];
   private permOverride: string | null = null;
   private warnedNoGit = false;
-  /** The latest working-tree snapshot, while nothing can have changed since (reused at the end of the task). */
-  private freshTree: string | null = null;
-  private warnedSlowSnapshot = false;
   /** Said once per session that tests wait for the last plan step. */
   private deferredTestsNoted = false;
   private readonly cp: Checkpointer;
-  private limits: Limits | null;
-  private warnedWindows = new Set<string>();
-  private leanOk = true;
+  private readonly limitsWatch: AccountLimits;
+  private readonly changes: ChangeTracker;
   /** How each rung has fared on your recent steps; the rater nudges towards what worked. Refreshed at the start of every task. */
   private history: History | undefined;
   /** The last task written to your history, for /good and /bad. */
@@ -120,53 +119,19 @@ export class Pipeline {
   ) {
     this.conv = deps.conversation ?? newConversation();
     this.cp = deps.checkpoints ?? new NoCheckpoints();
-    this.limits = deps.limits ?? null;
-    const once = async (o: Parameters<RunClaudeFn>[0]) => {
-      try {
-        return await deps.run({
-          ...o,
-          onEvent: (e) => {
-            if (e.kind === 'limits') this.observeLimits(e.windows, e.status);
-            o.onEvent?.(e);
-          },
-        });
-      } catch (e) {
-        // A call that errors (max turns, budget, ...) still spent tokens: count them, or the budget cap and the totals undercount.
-        if (e instanceof SmartError && e.usage) {
-          this.taskUsage = addUsage(this.taskUsage, e.usage);
-          this.bus.emit({ type: 'tokens', usage: e.usage, sessionTotal: this.sessionTotal });
-        }
-        throw e;
-      }
-    };
-    // Overloaded servers: wait and try again rather than count a failure and escalate (a bigger model is no less busy).
-    const call = async (o: Parameters<RunClaudeFn>[0]) => {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          return await once(o);
-        } catch (e) {
-          const wait = OVERLOAD_WAITS_MS[attempt];
-          if (!(e instanceof SmartError) || e.kind !== 'overloaded' || wait === undefined || o.signal?.aborted) throw e;
-          this.bus.emit({ type: 'notice', level: 'warn', message: `Claude's servers are overloaded; trying again in ${wait / 1000} s (Esc cancels).` });
-          await (deps.sleep ?? abortableSleep)(wait, o.signal);
-          if (o.signal?.aborted) throw cancelled();
-        }
-      }
-    };
-    // Tool-less calls (classify, plan, review, small talk) start `claude` lean. If that breaks something that lives in the
-    // settings files (an apiKeyHelper login, a provider or proxy in `env`), retry once the normal way; when that works,
-    // stop using lean flags for this session. If the normal call fails too, lean was not the problem and stays on.
-    this.run = async (o) => {
-      if (!this.leanOk || !config.runner.leanCalls || o.tools?.length !== 0) return call(o);
-      try {
-        return await call({ ...o, lean: true });
-      } catch (e) {
-        if (!(e instanceof SmartError) || (e.kind !== 'auth' && e.kind !== 'claude')) throw e;
-        const res = await call(o);
-        this.leanOk = false;
-        return res;
-      }
-    };
+    this.limitsWatch = new AccountLimits(config, bus, () => this.now(), deps.limits ?? null, deps.limitsStore);
+    this.changes = new ChangeTracker({
+      bus, cp: this.cp, now: () => this.now(), conversation: () => this.conv, saveConversation: () => this.saveConversation(),
+      isRunning: () => this.running, note: (text) => this.notes.push(text),
+    });
+    this.run = makeRun(deps.run, config, {
+      onLimits: (windows, status) => this.limitsWatch.observe(windows, status),
+      onErrorUsage: (usage) => {
+        this.taskUsage = addUsage(this.taskUsage, usage);
+        this.bus.emit({ type: 'tokens', usage, sessionTotal: this.sessionTotal });
+      },
+      notice: (message) => this.bus.emit({ type: 'notice', level: 'warn', message }),
+    }, deps.sleep);
   }
 
   // ---- commands from the frontend -------------------------------------------------------
@@ -196,7 +161,7 @@ export class Pipeline {
   }
   /** Latest account usage windows Claude reported (may be from a previous run). */
   get accountLimits(): Limits | null {
-    return this.limits;
+    return this.limitsWatch.current;
   }
   /** Number of tasks remembered in the current conversation. */
   get chatTasks(): number {
@@ -269,7 +234,7 @@ export class Pipeline {
     const startedAt = (this.deps.now?.() ?? new Date()).toISOString();
     const summary: TaskSummary = { taskId, ok: false, cancelled: false, dryRun, totals: emptyUsage(), steps: [] };
     this.overhead = emptyUsage();
-    this.freshTree = null;
+    this.changes.fresh = null;
     const touched: string[] = [];
     let startTree: string | null = null;
     const doneRef: { ids: Set<string>; executing: boolean } = { ids: new Set(), executing: false };
@@ -298,7 +263,7 @@ export class Pipeline {
         emit({ type: 'notice', level: 'info', message: 'Not a git repository, so /undo and /diff are unavailable here. Run `git init` to enable them.' });
       }
       // The git snapshot runs while the classifier and planner think; it is only needed before the first file is touched.
-      const snapshotting = dryRun ? Promise.resolve(null) : this.snap().catch(() => null);
+      const snapshotting = dryRun ? Promise.resolve(null) : this.changes.snap().catch(() => null);
       this.bgSnapshot = snapshotting;
       const signal = this.ctl.signal;
 
@@ -425,7 +390,7 @@ export class Pipeline {
         // Nothing to /resume when it stopped before a step ran (while classifying or planning): the task is simply sent again.
         const resumable = this.conv.pending?.prompt === prompt;
         const hint = limited && !resumable ? 'Send the task again once it resets.' : err.kind === 'overloaded' && !resumable ? 'Send the task again in a few minutes.' : err.hint;
-        emit({ type: 'error', kind: err.kind, message: limited ? this.limitMessage(err) : err.message, hint });
+        emit({ type: 'error', kind: err.kind, message: limited ? this.limitsWatch.message(err) : err.message, hint });
       }
       return out;
     } finally {
@@ -524,52 +489,22 @@ export class Pipeline {
     return (this.deps.now?.() ?? new Date()).getTime();
   }
 
-  /**
-   * Follow-up tasks avoid downgrading to a model with a cold cache (see applyWarmCache). Within one
-   * task every step is routed on its own merits, so a single escalated step cannot drag the rest up.
-   */
+  /** See routeWithSession: limit pressure, then the warm-cache rule for follow-ups. */
   private warm(decision: RouteDecision): RouteDecision {
-    const pressured = applyLimitPressure(decision, this.limits, this.config);
-    const followUp = this.conv.tasks.length > 0 && this.conv.sessionId !== null;
-    const out = this.config.session.resume && followUp ? applyWarmCache(pressured, this.conv, this.now(), this.config) : pressured;
-    // If a rule swapped the model, the rated effort belongs to the model that is no longer used.
-    return out.tier !== decision.tier && out.score !== undefined ? { ...out, effort: effortAt(out.tier, out.score) } : out;
+    return routeWithSession(decision, { conv: this.conv, limits: this.limitsWatch.current, config: this.config, nowMs: this.now() });
   }
 
-  /** While an account usage window is nearly used up, plan with sonnet instead of the (heavier) configured planner model. */
+  /** See plannerDownshift. */
   private plannerDownshift(classification: Classification, score: number): ModelTier | null {
-    const tier = plannerTier(classification, this.config, score);
-    const probe = applyLimitPressure({ tier, model: this.config.models[tier], reason: 'planner', source: 'complexity' }, this.limits, this.config);
-    return probe.tier !== tier ? probe.tier : null;
+    return plannerDownshift(classification, score, this.limitsWatch.current, this.config);
   }
 
-  private observeLimits(windows: Limits['windows'], status?: string): void {
-    this.limits = { windows, status, at: this.now() };
-    this.deps.limitsStore?.save(this.limits);
-    this.bus.emit({ type: 'limits', limits: this.limits });
-    const warnAt = this.config.usage.warnAt;
-    if (!warnAt) return;
-    for (const [name, w] of Object.entries(windows)) {
-      const level = w.utilization >= 0.95 ? 'critical' : w.utilization >= warnAt ? 'warn' : null;
-      if (!level) continue;
-      const key = `${name}:${w.resetsAt ?? ''}:${level}`;
-      if (this.warnedWindows.has(key)) continue;
-      this.warnedWindows.add(key);
-      const reset = fmtReset(w.resetsAt, this.now());
-      const hint = this.config.usage.downshiftAt && w.utilization >= this.config.usage.downshiftAt ? ' Automatic routing is avoiding Opus until it resets.' : '';
-      this.bus.emit({ type: 'notice', level: 'warn', message: `Your ${windowLabel(name)} usage limit is ${pct(w.utilization)} used${reset ? ` (resets in ${reset})` : ''}.${hint}` });
-    }
-  }
 
-  /**
-   * A Claude Code session that has grown big makes every later step expensive: each turn re-reads all of it. Past
-   * `session.maxContextTokens` the next task starts a fresh session, and the first step gets the compact summary of the
-   * conversation instead (the same memory used when a saved session is lost).
-   */
+
+  /** Starts a fresh Claude Code session when the current one has grown too big (see sessionTooBig). */
   private rotateLargeSession(): void {
-    const max = this.config.session.maxContextTokens;
-    const size = this.conv.contextTokens ?? 0;
-    if (!max || !this.conv.sessionId || size < max) return;
+    const size = sessionTooBig(this.conv, this.config);
+    if (size === null) return;
     this.conv.sessionId = null;
     this.conv.contextTokens = 0;
     this.bus.emit({
@@ -578,16 +513,11 @@ export class Pipeline {
     });
   }
 
-  /** "Your Claude usage limit is reached: … (resets in 2h 14m)" using the reset time Claude gave, or the last one it reported. */
-  private limitMessage(err: SmartError): string {
-    const resetsAt = err.resetsAt ?? tightest(this.limits, this.now())?.window.resetsAt;
-    const reset = fmtReset(resetsAt, this.now());
-    return reset && !/resets/i.test(err.message) ? `${err.message} (resets in ${reset})` : err.message;
-  }
+
 
   /** Human-readable effective configuration, for /config. */
   describe(): string[] {
-    return describeConfig(this.config, { permissionMode: this.permissionMode, modeOverridden: this.permOverride !== null, limits: this.limits });
+    return describeConfig(this.config, { permissionMode: this.permissionMode, modeOverridden: this.permOverride !== null, limits: this.limitsWatch.current });
   }
 
   private emitConversation(): void {
@@ -652,63 +582,20 @@ export class Pipeline {
     });
   }
 
-  /** A working-tree snapshot. A slow one (a big repository, especially on Windows) is pointed out once, with the usual fix. */
-  private async snap(): Promise<string | null> {
-    const t0 = this.now();
-    const tree = await this.cp.snapshot();
-    const ms = this.now() - t0;
-    if (ms > SLOW_SNAPSHOT_MS && !this.warnedSlowSnapshot) {
-      this.warnedSlowSnapshot = true;
-      this.bus.emit({
-        type: 'notice', level: 'info',
-        message: `Saving the /undo snapshot took ${(ms / 1000).toFixed(1)} s in this repository. \`git config core.fsmonitor true\` (Git 2.37+) usually makes it much faster.`,
-      });
-    }
-    return tree;
-  }
 
-  /** Convert a repository-relative git path to one relative to the project directory (posix separators). */
-  private fromRoot(p: string): string {
-    return path.posix.relative(this.cp.prefix, p);
-  }
 
-  /**
-   * The reviewer is the quality gate that works without tests: every plan step is reviewed, and a single-step
-   * task is reviewed when no automated check ran. Questions, steps that changed no files, and a lone edit rated easy
-   * (a typo, a rename: no acceptance criteria to check, and the review call took longer than the edit) are not.
-   */
-  private shouldReview(c: Classification, planSteps: number, checks: number, files: string[]): boolean {
-    if (!this.config.review.enabled || c.complexity === 'trivial' || files.length === 0) return false;
-    if (planSteps <= 1 && c.complexity === 'small_edit' && c.difficulty === 'easy') return false;
-    return planSteps > 1 || checks === 0;
-  }
 
-  /**
-   * The checks after one step. A test suite is often the slow part, so in a plan the steps before the last get the quick
-   * checks (typecheck, lint, build) and the last step also the tests: what an earlier step broke still fails there and is
-   * fixed before the task counts as done. Your own `verify.commands` always all run.
-   */
+  /** The checks after one step (see selectChecks); says once per session that tests wait for the last plan step. */
   private checksFor(lastStep: boolean): Check[] {
-    const all = detectChecks(this.cwd, this.config);
-    if (lastStep || this.config.verify.testEveryStep || this.config.verify.commands.length > 0) return all;
-    const quick = all.filter((c) => c.name !== 'test');
-    if (quick.length < all.length && !this.deferredTestsNoted) {
+    const { checks, deferred } = selectChecks(detectChecks(this.cwd, this.config), lastStep, this.config);
+    if (deferred && !this.deferredTestsNoted) {
       this.deferredTestsNoted = true;
       this.bus.emit({ type: 'notice', level: 'info', message: 'Tests run after the last step; earlier steps get the quicker checks (verify.testEveryStep: true runs them every step).' });
     }
-    return quick;
+    return checks;
   }
 
-  /**
-   * The most one coding call may spend: the per-step cap, and what is left of the task budget. Claude Code stops a call that
-   * goes over (checked between its turns), so `--budget` is a real cap instead of only being checked between attempts.
-   */
-  private stepBudget(): number | null {
-    const perStep = this.config.limits.maxBudgetUsdPerStep;
-    const cap = this.config.limits.maxBudgetUsdPerTask;
-    const left = cap ? Math.max(0.01, Math.round((cap - this.taskUsage.costUsd) * 100) / 100) : null;
-    return perStep && left ? Math.min(perStep, left) : (perStep ?? left);
-  }
+
 
   /** Returns a description of the problems, or undefined when the step passes (or could not be reviewed). */
   private async review(task: string, step: PlanStep, files: string[], signal: AbortSignal, score?: number): Promise<string | undefined> {
@@ -727,20 +614,6 @@ export class Pipeline {
     return out.pass ? undefined : `A review of your changes found problems with this step:\n${out.issues.map((i) => `- ${i}`).join('\n')}`;
   }
 
-  /** Snapshot the end state, publish the change summary and remember it for /undo. Returns changed paths (cwd-relative). */
-  private async summarizeChanges(summary: TaskSummary, startTree: string | null, prompt: string): Promise<string[]> {
-    if (summary.dryRun || !startTree) return [];
-    // The last step's snapshot is still the end state unless a check or a later call ran after it.
-    const end = this.freshTree ?? (await this.snap());
-    this.freshTree = null;
-    if (!end || end === startTree) return [];
-    const ch: Changes | null = await this.cp.changes(startTree, end);
-    if (!ch || ch.files.length === 0) return [];
-    // Kept with the conversation, so /undo and /diff still work after quitting and starting smart again here.
-    this.conv.undo = [...(this.conv.undo ?? []), { prompt, start: startTree, end }].slice(-20);
-    this.bus.emit({ type: 'changes', files: ch.files.map((f) => ({ ...f, path: this.fromRoot(f.path) })), insertions: ch.insertions, deletions: ch.deletions });
-    return ch.files.filter((f) => f.status !== 'D').map((f) => this.fromRoot(f.path));
-  }
 
   /** `/good` and `/bad`: your verdict on the last task. It feeds the learning, so a model that keeps getting it wrong for you is used less. */
   rateLast(feedback: 'good' | 'bad'): void {
@@ -759,36 +632,13 @@ export class Pipeline {
   }
 
   /** Revert the working tree to how it was before the most recent task that changed files. */
-  async undo(): Promise<void> {
-    const emit = this.bus.emit.bind(this.bus);
-    if (this.running) return emit({ type: 'notice', level: 'warn', message: 'Cancel the running task (Esc) before undoing.' });
-    if (!this.cp.available) return emit({ type: 'notice', level: 'warn', message: 'Undo needs a git repository. Run `git init` in this directory first.' });
-    const entry = this.conv.undo?.at(-1);
-    if (!entry) return emit({ type: 'notice', level: 'info', message: 'Nothing to undo.' });
-    // Only the files this task changed: an edit you made yourself to another file since then is not the task's to revert.
-    const own = await this.cp.changes(entry.start, entry.end);
-    const now = own ? await this.snap() : null;
-    const r = own && now ? await this.cp.restore(entry.start, now, own.files.map((f) => f.path)) : null;
-    if (!r) return emit({ type: 'notice', level: 'warn', message: 'Could not restore the previous state (the snapshot may have been cleaned up by git gc).' });
-    this.conv.undo = this.conv.undo?.slice(0, -1);
-    // The task that was undone (not simply the latest: after a restart or a question in between they differ). Memory keeps a clipped prompt.
-    const key = entry.prompt.replace(/\s+/g, ' ').trim().slice(0, 200);
-    const undone = [...this.conv.tasks].reverse().find((t) => t.outcome !== 'reverted' && t.prompt.startsWith(key));
-    if (undone) undone.outcome = 'reverted';
-    const quoted = entry.prompt.length > 80 ? `${entry.prompt.slice(0, 79)}…` : entry.prompt;
-    this.notes.push(`The user undid your file changes from the task "${quoted}"; those files are back to how they were before it. Do not assume that work exists.`);
-    this.saveConversation();
-    emit({ type: 'notice', level: 'info', message: `Undid "${entry.prompt.length > 50 ? `${entry.prompt.slice(0, 49)}…` : entry.prompt}": restored ${r.restored} and removed ${r.removed} file${r.restored + r.removed === 1 ? '' : 's'}.` });
+  undo(): Promise<void> {
+    return this.changes.undo();
   }
 
   /** Publish a unified diff of the most recent task that changed files. */
-  async diff(): Promise<void> {
-    const emit = this.bus.emit.bind(this.bus);
-    if (!this.cp.available) return emit({ type: 'notice', level: 'warn', message: 'Diff needs a git repository. Run `git init` in this directory first.' });
-    const entry = this.conv.undo?.at(-1);
-    if (!entry) return emit({ type: 'notice', level: 'info', message: 'No changes to show yet.' });
-    const text = await this.cp.diff(entry.start, entry.end);
-    emit(text ? { type: 'diff', text } : { type: 'notice', level: 'warn', message: 'Could not compute the diff.' });
+  diff(): Promise<void> {
+    return this.changes.diff();
   }
 
   private addCallUsage(usage: Usage): void {
@@ -860,13 +710,13 @@ export class Pipeline {
 
       let ok = false;
       let context = 0;
-      this.freshTree = null; // this attempt may change files before any snapshot sees them
+      this.changes.fresh = null; // this attempt may change files before any snapshot sees them
       try {
         const res = await runStep({
           plan, step, index, total, touchedFiles: touched, failure, memory: memory || undefined, note: note || undefined, referenced: index === 0 ? a.referenced : undefined,
           session: sessionId ? { id: sessionId, resume: resuming } : undefined,
           effort,
-          maxBudgetUsd: this.stepBudget(),
+          maxBudgetUsd: stepBudget(this.config, this.taskUsage.costUsd),
           config: this.config, cwd: this.cwd, run: this.run, route: decision, permissionMode: perm.mode, signal,
           onDelta: (text) => emit({ type: 'step:stream', stepId: step.id, text }),
           onOutput: (kind, text) => {
@@ -888,10 +738,10 @@ export class Pipeline {
         emit({ type: 'tokens', stepId: step.id, usage: res.usage, sessionTotal: this.sessionTotal });
         if (note) this.notes = [];
         // What actually changed on disk (catches files made by shell commands), plus what the tool events reported.
-        const after = await this.snap();
-        this.freshTree = after;
+        const after = await this.changes.snap();
+        this.changes.fresh = after;
         const stepChanges = stepStart && after ? await this.cp.changes(stepStart, after) : null;
-        const changedNow = stepChanges ? stepChanges.files.filter((f) => f.status !== 'D').map((f) => this.fromRoot(f.path)) : [];
+        const changedNow = stepChanges ? stepChanges.files.filter((f) => f.status !== 'D').map((f) => this.changes.fromRoot(f.path)) : [];
         const stepFiles = [...new Set([...changedNow, ...res.touched])];
         for (const f of stepFiles) if (!touched.includes(f)) touched.push(f);
         if (after) a.cursor.tree = after;
@@ -913,11 +763,11 @@ export class Pipeline {
           onCheck: (r) => emit({ type: 'step:verify', stepId: step.id, ...r }),
         });
         if (signal.aborted) throw cancelled();
-        if (checks.length > 0) this.freshTree = null; // a check can write files (a formatter, a build)
+        if (checks.length > 0) this.changes.fresh = null; // a check can write files (a formatter, a build)
         // This attempt's own problem (`failure` still holds the previous attempt's text, which was already sent to the model).
         let problem: string | undefined = v.ok ? undefined : `${v.failure?.command} failed:\n${v.failure?.output}`;
         let reviewed = false;
-        if (v.ok && this.shouldReview(classification, plan.steps.length, checks.length, stepFiles)) {
+        if (v.ok && shouldReview(this.config, classification, plan.steps.length, checks.length, stepFiles)) {
           a.current('verify');
           problem = await this.review(a.prompt, step, stepFiles, signal, base.score);
           reviewed = true;
@@ -978,7 +828,7 @@ export class Pipeline {
     // A snapshot still running in the background (early exit: direct answer, cancel) shares the temporary index with the next task: wait for it.
     await this.bgSnapshot?.catch(() => null);
     this.bgSnapshot = null;
-    const changed = await this.summarizeChanges(summary, f.startTree, prompt);
+    const changed = await this.changes.summarize(summary.dryRun, f.startTree, prompt);
     if (!summary.dryRun && summary.steps.some((s) => s.outcome !== 'skipped')) {
       recordTask(this.conv, {
         prompt,
@@ -1022,29 +872,3 @@ export class Pipeline {
     return summary;
   }
 }
-
-/** A snapshot slower than this is worth a hint. */
-const SLOW_SNAPSHOT_MS = 4000;
-
-/** Waits before the retries of a call that found the API overloaded. */
-const OVERLOAD_WAITS_MS = [15_000, 45_000];
-
-const abortableSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
-  new Promise((resolve) => {
-    const t = setTimeout(done, ms);
-    function done() {
-      clearTimeout(t);
-      signal?.removeEventListener('abort', done);
-      resolve();
-    }
-    signal?.addEventListener('abort', done, { once: true });
-  });
-
-/** Model forced and planning off: no classifier call. `fallback` makes the rater use the local signals alone. */
-const forcedClassification = (tier: ModelTier): Classification => ({
-  complexity: 'multi_file', needsPlan: false, fallback: true, reason: `Model forced to ${tier} and planning off: no classifier call.`,
-});
-
-const skippedRecord = (s: PlanStep): StepRecord => ({
-  stepId: s.id, title: s.title, model: '-', tier: '-', attempts: 0, escalated: false, usage: emptyUsage(), outcome: 'skipped' as StepOutcome,
-});

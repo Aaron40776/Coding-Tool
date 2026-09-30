@@ -17,6 +17,8 @@ Node.js 22+ is required. smart supports **Windows 10 and 11** only, and CI runs 
 ```
 src/core/     the engine, no UI imports: pipeline (orchestrator), classifier, planner, router, runner, verifier, review,
               effort, smalltalk, checkpoint (git undo), claude (the only place that spawns `claude`), config, events
+src/core/pipeline/  split out of the pipeline: calls (call wrapper: overload retry, lean start), changes (snapshots, /undo, /diff),
+              limits (account usage windows), session (warm cache, rotation), steps (review, checks, budget)
 src/core/store/   files under %USERPROFILE%\.smart: tracker (history), conversation, inputHistory, limits, atomicFile (lock + atomic write)
 src/ui/       Ink components and the state reducer; src/cli.tsx and src/print.ts are the entry points
 test/         mirrors src; test/fixtures/fake-claude.mjs stands in for the CLI
