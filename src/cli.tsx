@@ -156,7 +156,7 @@ async function main() {
   process.on('exit', () => checkpoints.dispose());
   const limitsStore = new LimitsStore(expandHome(config.limitsPath));
   // Coding steps reuse one running `claude` per conversation (runner.keepAlive); it is ended when smart exits.
-  const run = createClaudeRunner({ keepAlive: config.runner.keepAlive });
+  const run = createClaudeRunner({ keepAlive: config.runner.keepAlive, onNotice: (message) => bus.emit({ type: 'notice', level: 'warn', message }) });
   process.on('exit', () => run.dispose());
   const pipeline = new Pipeline(config, bus, cwd, { run, tracker, conversation, conversationStore, checkpoints, limits: limitsStore.load(), limitsStore });
 

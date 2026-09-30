@@ -262,7 +262,7 @@ export interface ClaudeRunner extends RunClaudeFn {
  * The `run` smart uses: coding calls in a session go to a kept-alive process (see ClaudeProcess); everything else, and
  * everything after a process proved unusable, runs one `claude` per call.
  */
-export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; spawnImpl?: typeof nodeSpawn; command?: ClaudeCommand; oneShot?: RunClaudeFn; firstOutputMs?: number; controlMs?: number } = { keepAlive: true }): ClaudeRunner {
+export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; spawnImpl?: typeof nodeSpawn; command?: ClaudeCommand; oneShot?: RunClaudeFn; firstOutputMs?: number; controlMs?: number; onNotice?: (message: string) => void } = { keepAlive: true }): ClaudeRunner {
   const oneShot = opts.oneShot ?? runClaude;
   const bySession = new Map<string, ClaudeProcess>();
   const idle = new Map<string, NodeJS.Timeout>();
@@ -319,6 +319,7 @@ export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; 
       // Keeping the process alive does not work here: stop trying for this session and do it the classic way.
       writeDebug({ keepAlive: 'off for this run', reason: e.message });
       usable = false;
+      opts.onNotice?.(`Keeping Claude Code running between steps did not work here (${e.message.replace(/\.$/, '')}), so each step now starts its own \`claude\` for the rest of this session. \`runner.keepAlive: false\` skips the attempt; \`SMART_DEBUG=1\` logs the details.`);
       return oneShot(o);
     }
   };

@@ -64,5 +64,8 @@
   "homepage": "https://github.com/Aaron40776/Smart#readme",
   "bugs": {
     "url": "https://github.com/Aaron40776/Smart/issues"
+  },
+  "overrides": {
+    "esbuild": "^0.28.2"
   }
 }
