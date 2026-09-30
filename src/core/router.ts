@@ -42,6 +42,8 @@ export function route(
     /** Files the request refers to (@mentions). */
     files?: string[];
     history?: History;
+    /** Apply `routing.keywordRules` (default). Off for answering a question: the rules are about doing the work. */
+    keywords?: boolean;
   },
   config: SmartConfig,
 ): RouteDecision {
@@ -56,7 +58,7 @@ export function route(
   });
   if (override) return withRating(decision(override, config, `forced to ${override}`, 'override'));
   if (step?.tier) return withRating(decision(step.tier, config, `${step.tier} chosen for this step`, 'step'));
-  const kw = keywordTier(text, config);
+  const kw = args.keywords === false ? null : keywordTier(text, config);
   if (kw) return withRating(decision(kw.tier, config, `keyword "${kw.match}" → ${kw.tier}`, 'keyword'));
   // Unusable classifier output: the local signals still rate the work (a deadlock hunt is not a typo fix); Sonnet is the floor.
   if (classification.fallback) return withRating(decision(rating.rung.tier, config, `classifier output unusable, ${rating.summary}`, 'fallback'));

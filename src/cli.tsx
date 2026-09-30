@@ -8,7 +8,7 @@ import { expandHome, loadConfig } from './core/config.js';
 import { EventBus } from './core/events.js';
 import { SmartError } from './core/errors.js';
 import { createCheckpoints } from './core/checkpoint.js';
-import { ConversationStore } from './core/store/conversation.js';
+import { ConversationStore, newConversation } from './core/store/conversation.js';
 import { InputHistory } from './core/store/inputHistory.js';
 import { Pipeline } from './core/pipeline.js';
 import { isTier } from './core/router.js';
@@ -136,14 +136,17 @@ async function main() {
   const tracker = new Tracker(trackerPath);
   const bus = new EventBus();
   const conversationStore = new ConversationStore(expandHome(config.conversationsPath));
-  const previous = opts.continue ? conversationStore.load(cwd) : null;
+  const stored = conversationStore.load(cwd);
+  const previous = opts.continue ? stored : null;
+  // A fresh conversation still keeps the file-undo history of this directory: /undo and /diff work across restarts.
+  const conversation = previous ?? (stored?.undo ? { ...newConversation(), undo: stored.undo } : undefined);
   const startupNotices = [...configWarnings, ...(opts.continue
     ? [previous ? `Continuing your previous conversation here (${previous.tasks.length} earlier task${previous.tasks.length === 1 ? '' : 's'}).` : 'No previous conversation in this directory; starting a new one.']
     : [])];
   const checkpoints = await createCheckpoints(cwd);
   process.on('exit', () => checkpoints.dispose());
   const limitsStore = new LimitsStore(expandHome(config.limitsPath));
-  const pipeline = new Pipeline(config, bus, cwd, { run: runClaude, tracker, conversation: previous ?? undefined, conversationStore, checkpoints, limits: limitsStore.load(), limitsStore });
+  const pipeline = new Pipeline(config, bus, cwd, { run: runClaude, tracker, conversation, conversationStore, checkpoints, limits: limitsStore.load(), limitsStore });
 
   if (opts.print) {
     let prompt = task;

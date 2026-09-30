@@ -1,6 +1,6 @@
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { homedir } from 'node:os';
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { EventBus } from '../core/events.js';
 import type { Pipeline } from '../core/pipeline.js';
 import { costLines, summarize } from '../core/stats.js';
@@ -57,6 +57,11 @@ export interface AppProps {
   onExit?: (ok: boolean) => void;
 }
 
+const clipPrompt = (p: string): string => {
+  const one = p.replace(/\s+/g, ' ').trim();
+  return one.length > 50 ? `${one.slice(0, 49)}…` : one;
+};
+
 const WELCOME = ['Claude Code, routed to the cheapest capable model.', 'Type a task and press Enter, e.g. "make me a snake game".', '/help lists commands.'];
 
 export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial, startupNotices, inputHistory, oneShot, onExit }: AppProps) {
@@ -75,7 +80,9 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
   const maxScroll = useRef(0);
   const [draft, setDraft] = useState('');
   const [history] = useState(() => inputHistory?.load() ?? []);
-  const [files] = useState(() => projectFiles(cwd, 400));
+  const [files, setFiles] = useState(() => projectFiles(cwd, 400));
+  /** A task typed while another one runs: it starts when that one completes. */
+  const [queued, setQueued] = useState<string | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -124,6 +131,19 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
     return undefined;
   }, [oneShot, state.phase, state.ok, exit, onExit]);
 
+  // Read the history once when /stats opens (and again when a task ends), not on every frame.
+  const statsSummary = useMemo(() => (view === 'stats' ? summarize(tracker.load(), { now: Date.now() }) : null), [view, tracker, state.phase]);
+
+  // When a task ends: pick up files it created for @ completion, and start the queued task if it completed.
+  useEffect(() => {
+    if (state.phase !== 'finished') return;
+    setFiles(projectFiles(cwd, 400));
+    if (!queued || pipeline.isRunning) return;
+    setQueued(null);
+    if (state.ok) startTask(queued);
+    else dispatch({ type: 'notice', level: 'warn', message: `The queued task was not started because this one did not complete: "${clipPrompt(queued)}". Press ↑ to send it again.` });
+  }, [state.phase]);
+
   const steps = state.plan?.steps.length ?? 0;
   const busy = state.phase === 'running' || state.phase === 'approval';
 
@@ -137,7 +157,13 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
     if (state.phase === 'approval') return; // the approval screen owns the keyboard
     if (key.escape) {
       if (view === 'stats') setView('main');
-      else if (pipeline.isRunning) pipeline.cancel();
+      else if (pipeline.isRunning) {
+        pipeline.cancel();
+        if (queued) {
+          setQueued(null);
+          dispatch({ type: 'ui:info', text: `Dropped the queued task too: "${clipPrompt(queued)}".` });
+        }
+      }
       else if (focus !== 'input') setFocus('input');
       return;
     }
@@ -165,6 +191,10 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
     inputHistory?.push(text);
     switch (cmd.kind) {
       case 'task':
+        if (pipeline.isRunning) {
+          setQueued(cmd.prompt);
+          return dispatch({ type: 'ui:info', text: `${queued ? 'Replaced the queued task' : 'Queued'}: "${clipPrompt(cmd.prompt)}". It starts when this task completes (Esc cancels both).` });
+        }
         return startTask(cmd.prompt);
       case 'stats':
         return setView('stats');
@@ -213,7 +243,7 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
 
   // header 1 + pipeline 1 + input 3 + hint 1 = 6, plus one spare row: Ink clears the screen when output fills every row.
   const mainHeight = Math.max(6, size.rows - 7);
-  const tags = [dryRun ? 'dry-run' : '', mode ? `mode:${modeLabel(mode)}` : '', forced ? `model:${forced}` : 'model:auto', state.chatTasks > 0 ? `chat:${state.chatTasks}` : ''].filter(Boolean);
+  const tags = [queued ? 'queued' : '', dryRun ? 'dry-run' : '', mode ? `mode:${modeLabel(mode)}` : '', forced ? `model:${forced}` : 'model:auto', state.chatTasks > 0 ? `chat:${state.chatTasks}` : ''].filter(Boolean);
   const suggestions = matchCommands(draft);
   const fileHits = matchFiles(draft, files);
   const hint =
@@ -228,7 +258,9 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
         : draft.startsWith('/')
           ? 'No such command. Try /help.'
           : busy
-            ? 'Esc cancel · Tab panel'
+            ? queued
+              ? `Queued next: ${clipPrompt(queued)} · Esc cancels both`
+              : 'Esc cancel · Enter queues the next task · /usage /cost /diff work meanwhile'
             : 'Enter send · Tab panel · /stats /model /dry /new /help · Ctrl+C quit';
   const wide = size.cols >= 120;
 
@@ -256,8 +288,8 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
       </Box>
       {state.phase === 'approval' && state.plan ? (
         <PlanApproval plan={state.plan} routes={state.routes} onApprove={(p) => pipeline.approvePlan(p)} onCancel={() => pipeline.cancel()} height={mainHeight} width={size.cols} />
-      ) : view === 'stats' ? (
-        <StatsView summary={summarize(tracker.load(), { now: Date.now() })} limits={state.limits} path={trackerPath} height={mainHeight} width={size.cols} />
+      ) : view === 'stats' && statsSummary ? (
+        <StatsView summary={statsSummary} limits={state.limits} path={trackerPath} height={mainHeight} width={size.cols} />
       ) : (
         <Box height={mainHeight}>
           <Box width="40%" flexShrink={0} flexDirection="column">
@@ -273,10 +305,9 @@ export function App({ pipeline, bus, tracker, trackerPath, cwd, version, initial
         onDraft={setDraft}
         completions={COMMANDS.map((c) => c.name)}
         files={files}
-        active={focus === 'input' && view === 'main' && state.phase !== 'approval' && state.phase !== 'running'}
+        active={focus === 'input' && view === 'main' && state.phase !== 'approval'}
         tags={tags}
-        placeholder={state.phase === 'idle' ? 'What should we build?' : 'Type another task…'}
-        busyText={state.phase === 'running' ? 'Working… (Esc to cancel)' : undefined}
+        placeholder={state.phase === 'running' ? 'Working… type the next task to queue it (Esc cancels)' : state.phase === 'idle' ? 'What should we build?' : 'Type another task…'}
       />
       <Box paddingX={1}>
         <Text dimColor wrap="truncate-end">{hint}</Text>
