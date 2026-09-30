@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 (2026-09-30)
+
+- Fix (Windows): a follow-up task whose effort differed from the previous one could wait about a minute. smart replaced the kept-alive `claude` process and started the new one on the same session at once, while the old one was still being ended, and a second forced `taskkill /T` two seconds later could hit a reused process id. The old process is now waited for (up to 3 s) before its session is resumed, and the forced kill is only sent while it is still running. Found in the first real Windows run.
+- `SMART_DEBUG=1` also logs when a kept-alive process is given up (`"keepAlive":"given up"`, with the reason and Claude Code's error output), so a fallback to one `claude` per call is visible.
+
 ## 0.3.0 (2026-09-30)
 
 - Fix: a kept-alive `claude` process that never answers (an older Claude Code that ignores `--input-format stream-json`) no longer hangs the step: after 30 s without any output it is given up and the call runs the classic way, which is safe because nothing has reached the API by then. A model switch the process refuses or does not confirm within 10 s moves the step to a fresh process on the new model instead of failing it.
