@@ -8,7 +8,7 @@ export function describeConfig(c: SmartConfig, ctx: { permissionMode: string; mo
   const t = tightest(ctx.limits);
   return [
     `Models: haiku=${c.models.haiku}, sonnet=${c.models.sonnet}, opus=${c.models.opus}`,
-    `Routing: trivial→${r.trivial}, small_edit→${r.small_edit}, multi_file→${r.multi_file}, large_build→${r.large_build}; classifier ${r.classifier}, planner ${r.planner} (big/hard) / ${r.plannerLight} (mid-size), reviewer ${r.reviewer}`,
+    `Routing: trivial→${r.trivial}, small_edit→${r.small_edit}, multi_file→${r.multi_file}, large_build→${r.large_build}; classifier ${r.classifier}${r.fastLane ? ' (skipped for routine edits)' : ''}, planner ${r.planner} (big/hard) / ${r.plannerLight} (mid-size), reviewer ${r.reviewer}`,
     r.keywordRules.length ? `Keyword rules: ${r.keywordRules.map((k) => `/${k.match}/→${k.tier}`).join(', ')}` : 'Keyword rules: none',
     `Escalation: retry ${c.escalation.retriesPerModel}× per model, then ${c.escalation.ladder.join(' → ')}`,
     `Effort: ${c.runner.autoEffort ? 'chosen per task' : 'Claude Code default'}${Object.keys(c.runner.effort).length ? ` (pinned: ${Object.entries(c.runner.effort).map(([k, v]) => `${k}=${v}`).join(', ')})` : ''} · Lean classify/plan/review calls: ${c.runner.leanCalls ? 'on' : 'off'}`,

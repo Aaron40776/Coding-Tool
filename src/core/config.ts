@@ -29,6 +29,8 @@ const ConfigSchema = z.object({
        * `quality` needs less. The per-complexity tiers below are floors the rater never goes under.
        */
       optimize: z.enum(['cost', 'balanced', 'quality']).default('balanced'),
+      /** Skip the classifier call for clearly routine edits ("fix the typo", "rename x"): saves a whole call, about 5 s. */
+      fastLane: z.boolean().default(true),
       trivial: tier.default('haiku'),
       small_edit: tier.default('sonnet'),
       multi_file: tier.default('sonnet'),

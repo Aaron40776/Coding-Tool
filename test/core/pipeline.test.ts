@@ -72,7 +72,7 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
 describe('Pipeline: happy paths', () => {
   it('runs a small edit end to end: classify, single step on sonnet, verify, done', async () => {
     const t = setup();
-    const s = await t.pipeline.runTask('rename foo to bar');
+    const s = await t.pipeline.runTask('make the parser handle empty input');
     expect(s.ok).toBe(true);
     expect(t.calls.map((c) => c.role)).toEqual(['classifier', 'executor']);
     expect(t.calls[0]?.model).toBe('haiku');

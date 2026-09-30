@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { RunClaudeFn } from './claude.js';
 import { resolvePermissionMode } from './claude.js';
 import { NoCheckpoints, type Changes, type Checkpointer } from './checkpoint.js';
-import { classify } from './classifier.js';
+import { classify, fastClassify } from './classifier.js';
 import type { SmartConfig } from './config.js';
 import { newConversation, recordTask, renderMemory, type Conversation, type ConversationStore, type PendingTask } from './store/conversation.js';
 import { EventBus, type Stage } from './events.js';
@@ -11,12 +11,12 @@ import { SmartError, cancelled, isCancelled } from './errors.js';
 import { projectContext, projectFiles } from './files.js';
 import { resolveMentions } from './mentions.js';
 import { describeConfig } from './describe.js';
-import { effortFor, planEffort } from './effort.js';
+import { answerEffort, effortFor, planEffort } from './effort.js';
 import { buildHistory, type History } from './rating/learn.js';
 import { effortAt, rateTask } from './rating/rate.js';
-import { CHAT_SYSTEM, isSmallTalk } from './smalltalk.js';
+import { ANSWER_SYSTEM, CHAT_SYSTEM, isSmallTalk } from './smalltalk.js';
 import { makePlan, singleStepPlan } from './planner.js';
-import { applyWarmCache, plannerTier, route } from './router.js';
+import { ANSWER_UPGRADE_SCORE, applyWarmCache, plannerTier, route, routeRole, reviewerTier } from './router.js';
 import { reviewStep } from './review.js';
 import { gatherFiles, runStep } from './runner.js';
 import type { StepOutcome, StepRecord, TaskRecord, Tracker } from './store/tracker.js';
@@ -291,7 +291,9 @@ export class Pipeline {
       } else {
         // 1. classify
         at('classify');
-        const c = await classify(prompt, { config: this.config, cwd: this.cwd, run: this.run, signal, memory });
+        // Clearly routine edits skip the classifier round trip altogether.
+        const fast = fastClassify(prompt, this.config);
+        const c = fast ? { classification: fast, usage: emptyUsage() } : await classify(prompt, { config: this.config, cwd: this.cwd, run: this.run, signal, memory });
         this.addCallUsage(c.usage);
         classification = c.classification;
         summary.classification = classification;
@@ -301,7 +303,11 @@ export class Pipeline {
 
         // A pure question the classifier could answer on the spot needs no coding session: one call in total.
         if (classification.answer && !this.forced && !dryRun && !referenced.length) {
-          return await this.respond(prompt, summary, { startedAt, memory, at, stage, touched }, { classification, text: classification.answer });
+          // The classifier's own answer is right for an easy question. A question the rater finds hard is answered by the model
+          // it picks, at its effort (one more tool-free call; still no coding session).
+          const rated = this.routeTask(classification, prompt);
+          const worthUpgrading = rated.tier !== 'haiku' && (rated.score ?? 0) >= ANSWER_UPGRADE_SCORE;
+          return await this.respond(prompt, summary, { startedAt, memory, at, stage, touched }, { classification, text: classification.answer, upgrade: worthUpgrading ? rated : undefined });
         }
 
         // 2. plan
@@ -309,6 +315,9 @@ export class Pipeline {
         if (wantPlan) {
           at('plan');
           const taskScore = rateTask({ text: prompt, classification, files: this.taskFiles, config: this.config, history: this.history }).score;
+          const planRole = routeRole('planner', this.config, this.forced ?? this.plannerDownshift(classification, taskScore), classification, taskScore);
+          const planEffortNow = planEffort(classification.complexity, this.config, taskScore);
+          emit({ type: 'notice', level: 'info', message: `Planning with ${planRole.tier}${planEffortNow ? ` · ${planEffortNow}` : ''}` });
           const p = await makePlan(prompt, classification, {
             config: this.config, cwd: this.cwd, run: this.run, signal, override: this.forced ?? this.plannerDownshift(classification, taskScore), memory, effort: planEffort(classification.complexity, this.config, taskScore), score: taskScore,
             projectFiles: (this.deps.listFiles ?? projectFiles)(this.cwd), context: (this.deps.projectContext ?? projectContext)(this.cwd), referenced,
@@ -403,13 +412,14 @@ export class Pipeline {
     summary: TaskSummary,
     x: { startedAt: string; memory: string; at: (s: Stage) => void; stage: (s: Stage, st: 'active' | 'done' | 'skipped' | 'failed') => void; touched: string[] },
     /** The classifier already answered (one call in total): show that answer instead of asking again. */
-    ready?: { classification: Classification; text: string },
+    ready?: { classification: Classification; text: string; upgrade?: RouteDecision },
   ): Promise<TaskSummary> {
     const emit = this.bus.emit.bind(this.bus);
-    const tier: ModelTier = ready ? this.config.routing.classifier : 'haiku';
-    const decision: RouteDecision = ready
+    const upgrade = ready?.upgrade;
+    const tier: ModelTier = upgrade?.tier ?? (ready ? this.config.routing.classifier : 'haiku');
+    const decision: RouteDecision = upgrade ?? (ready
       ? { tier, model: this.config.models[tier], reason: 'answered by the classifier: no second call' }
-      : { tier, model: this.config.models[tier], reason: 'small talk: no classification, no tools' };
+      : { tier, model: this.config.models[tier], reason: 'small talk: no classification, no tools' });
     const classification: Classification = ready?.classification ?? { complexity: 'trivial', needsPlan: false, reason: 'Small talk.' };
     const plan = singleStepPlan(prompt);
     const step = plan.steps[0]!;
@@ -426,13 +436,14 @@ export class Pipeline {
     emit({ type: 'step:start', stepId: step.id, title: 'Reply', route: decision, attempt: 1, at: this.now() });
     const rec: StepRecord = { stepId: step.id, title: 'Reply', model: decision.model, tier, attempts: 1, escalated: false, usage: emptyUsage(), outcome: 'failed' };
     try {
-      const res = ready
+      const res = ready && !upgrade
         ? null
         : await this.run({
             prompt: x.memory ? `<conversation>\n${x.memory}\n</conversation>\n\n${prompt}` : prompt,
-            model: decision.model, systemPrompt: CHAT_SYSTEM, tools: [], cwd: this.cwd, signal: this.ctl!.signal,
+            model: decision.model, systemPrompt: upgrade ? ANSWER_SYSTEM : CHAT_SYSTEM, tools: [], cwd: this.cwd, signal: this.ctl!.signal,
+            effort: upgrade ? answerEffort({ decision: upgrade, tier, config: this.config }) : undefined,
           });
-      this.lastReply = (ready?.text ?? res?.text ?? '').trim();
+      this.lastReply = (res?.text ?? ready?.text ?? '').trim();
       if (res) {
         rec.usage = res.usage;
         this.taskUsage = addUsage(this.taskUsage, res.usage);
@@ -574,11 +585,13 @@ export class Pipeline {
   }
 
   /** Returns a description of the problems, or undefined when the step passes (or could not be reviewed). */
-  private async review(task: string, step: PlanStep, files: string[], signal: AbortSignal): Promise<string | undefined> {
+  private async review(task: string, step: PlanStep, files: string[], signal: AbortSignal, score?: number): Promise<string | undefined> {
     const emit = this.bus.emit.bind(this.bus);
     const contents = gatherFiles(this.cwd, files, this.config.limits.maxContextBytes);
     if (contents.length === 0) return undefined;
-    const out = await reviewStep({ task, step, files: contents, config: this.config, cwd: this.cwd, run: this.run, signal });
+    // A step rated hard is checked by a stronger reviewer than the one that would check a rename.
+    const tier = reviewerTier(score, this.config);
+    const out = await reviewStep({ task, step, files: contents, config: this.config, cwd: this.cwd, run: this.run, signal, tier, effort: tier === 'sonnet' && this.config.runner.autoEffort ? 'low' : undefined });
     this.addCallUsage(out.usage);
     if (out.kind === 'unavailable') {
       emit({ type: 'step:review', stepId: step.id, pass: true, issues: [], skipped: out.reason });
@@ -747,7 +760,7 @@ export class Pipeline {
         let reviewed = false;
         if (v.ok && this.shouldReview(classification, plan.steps.length, checks.length, stepFiles)) {
           a.current('verify');
-          problem = await this.review(a.prompt, step, stepFiles, signal);
+          problem = await this.review(a.prompt, step, stepFiles, signal, base.score);
           reviewed = true;
         }
         emit({ type: 'stage', stage: 'verify', status: checks.length === 0 && !reviewed ? 'skipped' : problem ? 'failed' : 'done' });
