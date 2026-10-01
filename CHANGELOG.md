@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4 (2026-10-01)
+
+- Fix: when keep-alive turns out not to work with your Claude Code (the notice "Keeping Claude Code running between steps did not work here"), the pre-started spare processes for classify, plan and review calls now stop too. They use the same `--input-format stream-json` mode, so an older Claude Code that cannot keep a process alive may not take them either.
+- Checked in a full pass over the code: lint, typecheck, 614 tests, the real-Claude smoke test, `smart -p` and the interactive app against the real Claude Code (classifier 1.9 s on a spare with thinking off, coding step and follow-up on the kept-alive process, nothing left running after `/quit`).
+
 ## 0.3.3 (2026-10-01)
 
 - **Faster, cheaper classifier**: the classify call that starts every task ran with Haiku's extended thinking and wrote about 750 output tokens for a 60-token answer. It now runs without thinking (`MAX_THINKING_TOKENS=0` for that process only): 3.7 s instead of 9.2 s on average and 217 instead of 759 output tokens over the same 8 tasks, with the same complexity and plan decisions. Without thinking, borderline tasks were rated "hard" less often (a JWT refactor: 1 of 4 runs instead of 3 of 4); the classifier's instructions now say to pick "hard" when unsure, which brought it back to 3 of 4 without moving easy or normal tasks. Coding steps, planning and reviews keep thinking.

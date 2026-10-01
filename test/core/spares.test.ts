@@ -82,4 +82,18 @@ describe('spare processes for short calls', () => {
     expect(child?.pid).toBeDefined();
     child?.kill();
   });
+
+  it('spares stop once keep-alive has proven unusable for this Claude Code', async () => {
+    vi.stubEnv('FAKE_DIE', '1'); // the process exits at once, as an old Claude Code that rejects stream-json input would
+    const oneShot = vi.fn<RunClaudeFn>(async () => cold);
+    const run = createClaudeRunner({ keepAlive: true, command, oneShot });
+    cleanup.push(run);
+    await run({ prompt: 'x', model: 'sonnet', cwd: process.cwd(), session: { id: 's1', resume: false } }); // unusable → classic way, keep-alive off
+    vi.unstubAllEnvs();
+    await run(classify());
+    expect(oneShot.mock.calls.every(([o]) => !o.streamInput)).toBe(true);
+    run.warm(classify()); // a no-op now
+    await run(classify());
+    expect(oneShot.mock.calls.every(([o]) => !o.streamInput)).toBe(true);
+  });
 });
