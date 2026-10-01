@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
-import { buildArgs, type ClaudeCommand, type RunClaudeOptions } from './claude.js';
+import { buildArgs, spawnEnv, type ClaudeCommand, type RunClaudeOptions } from './claude.js';
 import { killTree } from './killTree.js';
 
 /**
@@ -28,7 +28,7 @@ export class Spares {
 
   /** A spare only fits a call with exactly the same command line. */
   private keyOf(o: RunClaudeOptions): string {
-    return JSON.stringify([o.cwd, buildArgs({ ...o, streamInput: true })]);
+    return JSON.stringify([o.cwd, o.thinking ?? null, buildArgs({ ...o, streamInput: true })]);
   }
 
   get size(): number {
@@ -42,7 +42,7 @@ export class Spares {
     const cmd = this.command();
     let child: ChildProcess;
     try {
-      child = this.spawnFn(cmd.cmd, [...cmd.prefix, ...buildArgs({ ...o, streamInput: true })], { cwd: o.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = this.spawnFn(cmd.cmd, [...cmd.prefix, ...buildArgs({ ...o, streamInput: true })], { cwd: o.cwd, stdio: ['pipe', 'pipe', 'pipe'], env: spawnEnv(o) });
     } catch {
       return;
     }

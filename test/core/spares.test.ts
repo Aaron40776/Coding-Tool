@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runClaude, type ClaudeResult, type RunClaudeFn, type RunClaudeOptions } from '../../src/core/claude.js';
+import { runClaude, spawnEnv, type ClaudeResult, type RunClaudeFn, type RunClaudeOptions } from '../../src/core/claude.js';
 import { createClaudeRunner, type ClaudeRunner } from '../../src/core/claudeProcess.js';
 import { sparable, Spares } from '../../src/core/spares.js';
+import { CLASSIFIER_SYSTEM, classifierCall } from '../../src/core/classifier.js';
+import { defaultConfig } from '../../src/core/config.js';
 import { emptyUsage } from '../../src/core/types.js';
 
 const fake = fileURLToPath(new URL('../fixtures/fake-claude-stream.mjs', import.meta.url));
@@ -64,5 +66,20 @@ describe('spare processes for short calls', () => {
     cleanup.push(off);
     off.warm(classify());
     expect((await off(classify())).text).toBe('cold start');
+  });
+
+  it('the classifier runs without extended thinking, and its spare matches only such calls', () => {
+    const call = classifierCall(defaultConfig(), process.cwd());
+    expect(call.thinking).toBe(false);
+    expect(CLASSIFIER_SYSTEM).toContain('If unsure between "normal" and "hard", choose "hard"');
+    expect(spawnEnv({ ...call, prompt: '' })?.MAX_THINKING_TOKENS).toBe('0');
+    expect(spawnEnv(classify())).toBeUndefined(); // other calls keep Claude Code's default
+    const spares = new Spares(() => command, spawn);
+    cleanup.push(spares);
+    spares.warm(classify({ thinking: false }));
+    expect(spares.take(classify())).toBeUndefined();
+    const child = spares.take(classify({ thinking: false }));
+    expect(child?.pid).toBeDefined();
+    child?.kill();
   });
 });
