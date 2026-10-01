@@ -297,7 +297,7 @@ export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; 
 
   const run = async (o: RunClaudeOptions): Promise<ClaudeResult> => {
     const eligible = usable && o.session && !o.jsonSchema && !o.maxBudgetUsd && !o.lean && o.tools === undefined && !o.binary;
-    if (!eligible) return spares && sparable(o) ? spared(o) : oneShot(o);
+    if (!eligible) return spares && usable && sparable(o) ? spared(o) : oneShot(o);
     const id = o.session!.id;
     const key = JSON.stringify([o.cwd, o.effort ?? '', o.permissionMode ?? '', o.appendSystemPrompt ?? '', o.systemPrompt ?? null, o.bare ?? false, o.extraArgs ?? [], Boolean(o.partial)]);
     let proc = bySession.get(id);
@@ -333,12 +333,15 @@ export function createClaudeRunner(opts: { keepAlive: boolean; idleMs?: number; 
       // Keeping the process alive does not work here: stop trying for this session and do it the classic way.
       writeDebug({ keepAlive: 'off for this run', reason: e.message });
       usable = false;
+      spares?.dispose(); // the same Claude Code that cannot keep a process alive may not take stream-json input for spares either
       opts.onNotice?.(`Keeping Claude Code running between steps did not work here (${e.message.replace(/\.$/, '')}), so each step now starts its own \`claude\` for the rest of this session. \`runner.keepAlive: false\` skips the attempt; \`SMART_DEBUG=1\` logs the details.`);
       return oneShot(o);
     }
   };
   return Object.assign(run, {
-    warm: (o: RunClaudeOptions) => spares?.warm(o),
+    warm: (o: RunClaudeOptions) => {
+      if (usable) spares?.warm(o);
+    },
     dispose: () => {
       spares?.dispose();
       for (const id of [...bySession.keys()]) drop(id);
