@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3 (2026-10-01)
+
+- **Faster, cheaper classifier**: the classify call that starts every task ran with Haiku's extended thinking and wrote about 750 output tokens for a 60-token answer. It now runs without thinking (`MAX_THINKING_TOKENS=0` for that process only): 3.7 s instead of 9.2 s on average and 217 instead of 759 output tokens over the same 8 tasks, with the same complexity and plan decisions. Without thinking, borderline tasks were rated "hard" less often (a JWT refactor: 1 of 4 runs instead of 3 of 4); the classifier's instructions now say to pick "hard" when unsure, which brought it back to 3 of 4 without moving easy or normal tasks. Coding steps, planning and reviews keep thinking.
+
 ## 0.3.2 (2026-09-30)
 
 - **Faster classify, plan and review calls**: they now run on a spare `claude` started ahead of time (the classifier's when smart opens, then one after each such call for the next), so Claude Code's start-up (about 1.3 s per call measured on Windows, where every task starts with a classifier call) happens while you type or while a step runs. A spare costs nothing until it is used and ends with smart; at most three wait at a time. Checked against the real classifier: the same classifications as a normal start. Part of `runner.keepAlive`; `smart -p` does not use spares.

@@ -201,11 +201,18 @@ export interface RunClaudeOptions {
   partial?: boolean;
   /** Send the prompt as one stream-json message (`--input-format stream-json`), as a pre-started spare process expects. */
   streamInput?: boolean;
+  /** `false`: no extended thinking (`MAX_THINKING_TOKENS=0` for this process). Undefined: Claude Code's default. */
+  thinking?: boolean;
   extraArgs?: string[];
   onEvent?: (e: ClaudeStreamEvent) => void;
   /** Injectable for tests. */
   spawnImpl?: typeof nodeSpawn;
   binary?: string;
+}
+
+/** The environment for a `claude` process: thinking switched off when the call asks for it. */
+export function spawnEnv(o: RunClaudeOptions): NodeJS.ProcessEnv | undefined {
+  return o.thinking === false ? { ...process.env, MAX_THINKING_TOKENS: '0' } : undefined;
 }
 
 export function buildArgs(o: RunClaudeOptions): string[] {
@@ -283,7 +290,7 @@ export function runClaude(opts: RunClaudeOptions): Promise<ClaudeResult> {
     const command: ClaudeCommand = opts.binary ? { cmd: opts.binary, prefix: [] } : claudeCommand();
     let child: ChildProcess;
     try {
-      child = spawnFn(command.cmd, [...command.prefix, ...buildArgs(opts)], { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawnFn(command.cmd, [...command.prefix, ...buildArgs(opts)], { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'], env: spawnEnv(opts) });
     } catch (e) {
       return reject(toSpawnError(e));
     }
@@ -370,7 +377,7 @@ export function debugTiming(o: RunClaudeOptions, keptAlive = false): { mark: (ki
     },
     done: (code) => {
       const line = {
-        time: new Date().toISOString(), model: o.model, tools: o.tools ? (o.tools.length ? 'some' : 'none') : 'all', lean: Boolean(o.lean), effort: o.effort ?? null,
+        time: new Date().toISOString(), model: o.model, tools: o.tools ? (o.tools.length ? 'some' : 'none') : 'all', lean: Boolean(o.lean), effort: o.effort ?? null, ...(o.thinking === false ? { thinking: false } : {}),
         session: `${keptAlive ? 'keep-alive ' : o.streamInput ? 'warm ' : ''}${o.session ? (o.session.resume ? 'resume' : 'new') : 'none'}`, exit: code,
         ms: { startupUntilReady: at.init ?? null, firstText: at.text ?? null, firstTool: at.tool ?? null, result: at.result ?? null, total: Date.now() - t0 },
       };
